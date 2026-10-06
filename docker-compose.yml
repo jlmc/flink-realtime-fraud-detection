@@ -5,6 +5,12 @@
 #   docker compose up -d
 #   docker compose up -d --scale flink-taskmanager=3
 #
+# Flink runs in one of two modes (see docs/spikes/S1-plugin-classloading.md for why they differ):
+#   Session Mode (default): flink-jobmanager + flink-taskmanager, job submitted with scripts/flink/upload-job.sh
+#   Application Mode:       docker compose stop flink-jobmanager flink-taskmanager
+#                           docker compose --profile app-mode up -d flink-jobmanager-app flink-taskmanager-app
+#                           (job JAR and plugins are mounted into usrlib/ of every container, UI on :8082)
+#
 # Persistent data lives in ./.data/ (hidden, git-ignored): postgres, kafka, minio, zookeeper.
 # Override the location with DATA_DIR. Reset everything: docker compose down && rm -rf .data
 
@@ -50,16 +56,29 @@ x-flink-properties: &flink-properties |
   s3.access-key: ${S3_ACCESS_KEY:-minioadmin}
   s3.secret-key: ${S3_SECRET_KEY:-minioadmin}
 
-x-flink-common: &flink-common
+x-flink-base: &flink-base
   image: *flink-image
   restart: unless-stopped
   environment:
     FLINK_PROPERTIES: *flink-properties
     ENABLE_BUILT_IN_PLUGINS: flink-s3-fs-hadoop-2.2.1.jar
-  volumes:
-    - ./dist/usrlib:/opt/flink/usrlib:ro
-    - ./dist/job:/opt/flink/job:ro
   networks: [fraud]
+
+# Session Mode: plugin JARs are copied into lib/ by the entrypoint (usrlib/ is not on the classpath in this mode).
+x-flink-session: &flink-session
+  <<: *flink-base
+  entrypoint: ["/session-entrypoint.sh"]
+  volumes:
+    - ./docker/flink/session-entrypoint.sh:/session-entrypoint.sh:ro
+    - ./dist/usrlib:/opt/fraud/plugins:ro
+
+# Application Mode: job JAR and plugins in usrlib/ of the JobManager AND of every TaskManager.
+# A separate HA cluster id and RPC address keep it from colliding with the session cluster's state in ZooKeeper.
+x-flink-app: &flink-app
+  <<: *flink-base
+  volumes:
+    - ./dist/usrlib:/opt/flink/usrlib/plugins:ro
+    - ./dist/job:/opt/flink/usrlib/job:ro
 
 services:
   # ------------------------------------------------------------------ PostgreSQL
@@ -213,7 +232,7 @@ services:
 
   # ------------------------------------------------------------------ Flink
   flink-jobmanager:
-    <<: *flink-common
+    <<: *flink-session
     command: jobmanager
     ports:
       - "${FLINK_UI_PORT:-8081}:8081"
@@ -235,10 +254,51 @@ services:
 
   # Scalable: no container_name and no fixed host ports -> `--scale flink-taskmanager=3`.
   flink-taskmanager:
-    <<: *flink-common
+    <<: *flink-session
     command: taskmanager
     depends_on:
       flink-jobmanager:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------- Flink, Application Mode (profile app-mode)
+  # Extra arguments for the job, e.g. restoring from a savepoint:
+  #   FLINK_APP_ARGS="--fromSavepoint s3://flink-state/savepoints/savepoint-xxxx" docker compose --profile app-mode up -d ...
+  flink-jobmanager-app:
+    <<: *flink-app
+    profiles: [app-mode]
+    command: >
+      standalone-job --job-classname io.github.jlmc.fraud.bootstrap.FraudJob
+      -Dhigh-availability.cluster-id=/fraud-poc-app
+      -Djobmanager.rpc.address=flink-jobmanager-app
+      -Dparallelism.default=${FLINK_PARALLELISM:-3}
+      ${FLINK_APP_ARGS:-}
+    ports:
+      - "${FLINK_APP_UI_PORT:-8082}:8081"
+    depends_on:
+      postgres-init-schema:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      zookeeper:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8081/overview >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  flink-taskmanager-app:
+    <<: *flink-app
+    profiles: [app-mode]
+    command: >
+      taskmanager
+      -Dhigh-availability.cluster-id=/fraud-poc-app
+      -Djobmanager.rpc.address=flink-jobmanager-app
+    depends_on:
+      flink-jobmanager-app:
         condition: service_healthy
 
 networks:
