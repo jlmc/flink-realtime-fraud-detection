@@ -37,15 +37,37 @@ Measured on the Compose cluster: parallelism 3 with `--postgres.pool-size 2` gav
 | Setting | Value | Reason |
 |---|---|---|
 | `maximumPoolSize` | `postgres.pool-size`, default 4 | Cap per TaskManager. Far below PostgreSQL's default of 100 connections even with several TaskManagers. |
-| `minimumIdle` | 1 | Keep one connection warm; the rest are opened on demand. |
+| `minimumIdle` | not set (fixed-size pool) | HikariCP recommends not setting it, so the pool is fixed-size: best performance and no connection created under load. A streaming sink keeps its connections busy anyway. |
 | `connectionTimeout` | `postgres.connection-timeout-ms`, default 5000 | With the database down, every attempt waits this long before failing. Kept short so the persister's retry loop (200 ms to 5 s backoff, 60 s budget) stays in control instead of one attempt eating the whole budget. |
 | `validationTimeout` | 5 s | Hikari's default; must stay below the connection timeout. |
 | `keepaliveTime` | 2 min | Below typical firewall and proxy idle cut-offs, so idle pooled connections are not silently dropped. |
 | `maxLifetime` | 30 min | Hikari's default; renews connections regularly and well before any server-side limit we know of. |
-| `autoCommit` | false | Every batch is an explicit transaction (all or nothing), which is what makes retrying a batch safe. |
+| `autoCommit` | false, set explicitly | Every batch is an explicit transaction (all or nothing), which is what makes retrying a batch safe. The repository always commits or rolls back itself; if a caller ever forgets, Hikari rolls back what is left open when the connection returns to the pool (covered by an integration test), and the server-side timeout below is the second net. |
+| `transactionIsolation` | `TRANSACTION_READ_COMMITTED` | Explicit instead of "whatever the driver defaults to". |
 | `initializationFailTimeout` | -1 | Do not fail at startup when the database is down: the persister retries and the job fails only after its time budget. |
 | Data source | `PGSimpleDataSource` handed to Hikari | Going through `jdbcUrl` uses `DriverManager`, which cannot see the driver from Flink's user-code classloader. |
-| Driver `socketTimeout` | 30 s | A hung database must not block a writer forever. |
+| Driver `socketTimeout` | 30 s | A hung database must not block a writer forever. HikariCP's "Rapid Recovery" page asks for at least 30 s so a dead peer is noticed instead of waiting for the OS TCP timeout (hours). |
+| Driver `loginTimeout` | 5 s | Bounds the whole login handshake; `connectTimeout` (5 s) only covers the TCP connect. |
+| Session `statement_timeout` | 20 s (via the driver `options`) | The server cancels a runaway statement. Kept below `socketTimeout` so the clean SQLSTATE 57014 reaches us before the client gives up on the socket; it is classified as a system failure and retried. |
+| Session `idle_in_transaction_session_timeout` | 60 s | The server kills a session left inside a transaction. With `autoCommit=false` a forgotten transaction would otherwise hold its locks indefinitely. |
+| Session `lock_timeout` | 10 s | Never wait unbounded on a lock. |
+
+## Practices checked and not applied
+
+Reviewed against the HikariCP README, its "About Pool Sizing" and "Rapid Recovery" pages and the PostgreSQL JDBC documentation.
+
+- `leakDetectionThreshold`: HikariCP says to leave it off unless leaks are suspected. A connection lives only for one batch and is
+  always closed with try-with-resources, so there is nothing to detect; the server-side timeouts cover the rest.
+- `connectionTestQuery`: not needed with a JDBC4 driver (Hikari validates with `isValid`).
+- Prepared statement caching in the pool: discouraged by HikariCP, the driver does it better.
+- Pool size: HikariCP's guidance is a small pool saturated with waiting threads, around `(cores x 2) + spindles` for the database
+  server. The default of 4 per TaskManager is deliberately far below that.
+- DNS caching: after a database failover that changes its IP, a long JVM DNS cache would delay reconnection. The JVM default (30 s
+  positive TTL without a Security Manager) is acceptable here; revisit if the database sits behind a changing address.
+- A `TimeZone` session option was tried and dropped: the driver sets the session time zone itself and ignores it. It does not matter
+  for correctness because instants are written as UTC `OffsetDateTime`.
+
+Sources: HikariCP README and wiki (github.com/brettwooldridge/HikariCP), PostgreSQL JDBC "Connecting to the database" parameters.
 
 ## Consequences and limits
 
@@ -53,5 +75,7 @@ Measured on the Compose cluster: parallelism 3 with `--postgres.pool-size 2` gav
   so pools do not leak between jobs. Writers always release their lease in `close()`.
 - With the pool smaller than the parallelism per TaskManager, throughput is bounded by the pool. That is intended; raise
   `postgres.pool-size` if the database can take it.
-- The pool lifecycle is unit tested without a database. The repository against a real PostgreSQL is only exercised by the manual
-  runs above; the automated test with Testcontainers is planned for the integration-tests milestone.
+- The pool lifecycle is unit tested without a database, and `PooledDataSourcesIT` tests it against a real PostgreSQL: connection
+  cap with 8 concurrent writers, recovery after the server drops every connection, rollback of a forgotten transaction, the session
+  settings, fixed size, and release when the last writer closes.
+- Pool metrics (active, idle, waiting connections) are not exposed yet; that belongs to the observability milestone.
