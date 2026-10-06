@@ -1,0 +1,246 @@
+# Local development stack. Defaults live in ${VAR:-default}; override through .env (see .env.example).
+# Docker bootstrap server (container -> kafka): kafka:19092
+# Host bootstrap server  (your laptop -> kafka): localhost:${KAFKA_HOST_PORT:-9092}
+#
+#   docker compose up -d
+#   docker compose up -d --scale flink-taskmanager=3
+#
+# Persistent data lives in ./.data/ (hidden, git-ignored): postgres, kafka, minio, zookeeper.
+# Override the location with DATA_DIR. Reset everything: docker compose down && rm -rf .data
+
+name: transaction-fraud-poc
+
+x-flink-image: &flink-image flink:2.2.1-java17
+
+# Cluster-wide Flink configuration (Flink 2.x config.yaml syntax, injected through FLINK_PROPERTIES).
+# Values are POC examples, see README "Checkpoint strategy" for the reasoning.
+x-flink-properties: &flink-properties |
+  jobmanager.rpc.address: flink-jobmanager
+  jobmanager.memory.process.size: 1536m
+  taskmanager.memory.process.size: 2048m
+  taskmanager.numberOfTaskSlots: ${FLINK_TASK_SLOTS:-3}
+  parallelism.default: ${FLINK_PARALLELISM:-3}
+
+  state.backend.type: rocksdb
+  execution.checkpointing.incremental: true
+  execution.checkpointing.dir: s3://${S3_BUCKET:-flink-state}/checkpoints
+  execution.checkpointing.savepoint-dir: s3://${S3_BUCKET:-flink-state}/savepoints
+  execution.checkpointing.interval: 10s
+  execution.checkpointing.timeout: 2min
+  execution.checkpointing.min-pause: 5s
+  execution.checkpointing.tolerable-failed-checkpoints: 3
+  execution.checkpointing.externalized-checkpoint-retention: RETAIN_ON_CANCELLATION
+  execution.checkpointing.num-retained: 3
+
+  restart-strategy.type: exponential-delay
+  restart-strategy.exponential-delay.initial-backoff: 1s
+  restart-strategy.exponential-delay.max-backoff: 60s
+  restart-strategy.exponential-delay.backoff-multiplier: 2.0
+  restart-strategy.exponential-delay.jitter-factor: 0.1
+  restart-strategy.exponential-delay.reset-backoff-threshold: 5min
+
+  high-availability.type: zookeeper
+  high-availability.zookeeper.quorum: zookeeper:2181
+  high-availability.zookeeper.path.root: /flink
+  high-availability.cluster-id: /fraud-poc
+  high-availability.storageDir: s3://${S3_BUCKET:-flink-state}/ha
+
+  s3.endpoint: http://minio:9000
+  s3.path-style-access: true
+  s3.access-key: ${S3_ACCESS_KEY:-minioadmin}
+  s3.secret-key: ${S3_SECRET_KEY:-minioadmin}
+
+x-flink-common: &flink-common
+  image: *flink-image
+  restart: unless-stopped
+  environment:
+    FLINK_PROPERTIES: *flink-properties
+    ENABLE_BUILT_IN_PLUGINS: flink-s3-fs-hadoop-2.2.1.jar
+  volumes:
+    - ./dist/usrlib:/opt/flink/usrlib:ro
+    - ./dist/job:/opt/flink/job:ro
+  networks: [fraud]
+
+services:
+  # ------------------------------------------------------------------ PostgreSQL
+  postgres:
+    image: postgres:17.11
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-fraud}
+      POSTGRES_USER: ${POSTGRES_USER:-fraud}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fraud}
+      # Subdirectory: avoids the "wrong ownership" error of bind-mounted data dirs on macOS Docker runtimes.
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - ${DATA_DIR:-./.data}/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fraud} -d ${POSTGRES_DB:-fraud}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [fraud]
+
+  # Runs Flyway migrations and exits 0. Safe to run any number of times.
+  postgres-init-schema:
+    image: flyway/flyway:11.20.3
+    command: >
+      -url=jdbc:postgresql://postgres:5432/${POSTGRES_DB:-fraud}
+      -user=${POSTGRES_USER:-fraud}
+      -password=${POSTGRES_PASSWORD:-fraud}
+      -connectRetries=60
+      -locations=filesystem:/flyway/sql
+      migrate
+    volumes:
+      - ./db/migration:/flyway/sql:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    networks: [fraud]
+
+  # ------------------------------------------------------------------ Kafka (KRaft, single node)
+  kafka:
+    image: apache/kafka:4.3.1
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENERS: INTERNAL://:19092,EXTERNAL://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:19092,EXTERNAL://localhost:${KAFKA_HOST_PORT:-9092}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      # The image defaults to /tmp/kraft-combined-logs, which would silently bypass the volume.
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    ports:
+      - "${KAFKA_HOST_PORT:-9092}:9092"
+    volumes:
+      - ${DATA_DIR:-./.data}/kafka:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:19092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 15s
+    networks: [fraud]
+
+  kafka-init:
+    image: apache/kafka:4.3.1
+    entrypoint: ["/bin/bash", "/scripts/create-topics.sh"]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:19092
+      KAFKA_PARTITIONS: ${KAFKA_PARTITIONS:-6}
+    volumes:
+      - ./docker/kafka/create-topics.sh:/scripts/create-topics.sh:ro
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+    networks: [fraud]
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:19092
+      DYNAMIC_CONFIG_ENABLED: "false"
+    ports:
+      - "${KAFKA_UI_PORT:-8080}:8080"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks: [fraud]
+
+  # ------------------------------------------------------------------ MinIO (S3) - built from source, see docker/minio/Dockerfile
+  minio:
+    build: ./docker/minio
+    image: fraud-poc/minio:RELEASE.2025-04-22T22-12-26Z
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - ${DATA_DIR:-./.data}/minio:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [fraud]
+
+  minio-init:
+    image: fraud-poc/minio:RELEASE.2025-04-22T22-12-26Z
+    entrypoint: ["/bin/sh", "/scripts/init.sh"]
+    environment:
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-flink-state}
+    volumes:
+      - ./docker/minio/init.sh:/scripts/init.sh:ro
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
+    networks: [fraud]
+
+  # ------------------------------------------------------------------ ZooKeeper (Flink JobManager HA)
+  zookeeper:
+    image: zookeeper:3.9.6
+    volumes:
+      - ${DATA_DIR:-./.data}/zookeeper/data:/data
+      - ${DATA_DIR:-./.data}/zookeeper/datalog:/datalog
+    healthcheck:
+      test: ["CMD-SHELL", "zkServer.sh status"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [fraud]
+
+  # ------------------------------------------------------------------ Flink
+  flink-jobmanager:
+    <<: *flink-common
+    command: jobmanager
+    ports:
+      - "${FLINK_UI_PORT:-8081}:8081"
+    depends_on:
+      postgres-init-schema:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      zookeeper:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8081/overview >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  # Scalable: no container_name and no fixed host ports -> `--scale flink-taskmanager=3`.
+  flink-taskmanager:
+    <<: *flink-common
+    command: taskmanager
+    depends_on:
+      flink-jobmanager:
+        condition: service_healthy
+
+networks:
+  fraud:
+    name: fraud-poc
