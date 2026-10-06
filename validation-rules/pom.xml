@@ -5,7 +5,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>com.example.fraud</groupId>
+        <groupId>io.github.jlmc</groupId>
         <artifactId>transaction-fraud-poc</artifactId>
         <version>1.0.0-SNAPSHOT</version>
     </parent>
@@ -15,7 +15,7 @@
     <name>validation-rules</name>
     <description>
         Aggregator and shared parent of the validation rule plugins. Each child is an independent JAR that implements
-        com.example.fraud.validation.TransactionValidationRule and registers itself through META-INF/services.
+        io.github.jlmc.fraud.validation.TransactionValidationRule and registers itself through META-INF/services.
         flink-job never depends on these modules: the JARs are deployed next to the job (see scripts/stage-dist.sh).
         To add a rule: create a sibling module here and list it below. No other module changes.
     </description>
@@ -29,7 +29,7 @@
     <!-- Every plugin depends on the contract, and on nothing else. -->
     <dependencies>
         <dependency>
-            <groupId>com.example.fraud</groupId>
+            <groupId>io.github.jlmc</groupId>
             <artifactId>validation-api</artifactId>
         </dependency>
     </dependencies>
@@ -51,7 +51,7 @@
                                     <excludes>
                                         <exclude>org.apache.flink:*</exclude>
                                         <exclude>org.apache.kafka:*</exclude>
-                                        <exclude>com.example.fraud:flink-job</exclude>
+                                        <exclude>io.github.jlmc:flink-job</exclude>
                                     </excludes>
                                     <message>validation rules may only depend on validation-api</message>
                                 </bannedDependencies>
