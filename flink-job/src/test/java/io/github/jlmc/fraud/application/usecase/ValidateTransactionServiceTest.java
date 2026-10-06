@@ -73,4 +73,16 @@ class ValidateTransactionServiceTest {
             assertThat(v.message()).contains("boom").contains("bug in plugin");
         });
     }
+
+    @Test
+    void pipelineInvariantsAreEnforcedEvenWithoutAnyPlugin() {
+        var empty = new Transaction(" ", null, "m", BigDecimal.TEN, "EUR", "PT", null);
+
+        var result = service().validate(empty, CTX);
+
+        assertThat(result.violations()).extracting("code").containsExactlyInAnyOrder(
+                ValidateTransactionService.TRANSACTION_ID_MISSING,
+                ValidateTransactionService.CUSTOMER_ID_MISSING,
+                ValidateTransactionService.TIMESTAMP_MISSING);
+    }
 }

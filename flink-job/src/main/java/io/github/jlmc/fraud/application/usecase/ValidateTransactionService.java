@@ -14,12 +14,19 @@ import java.util.List;
 /**
  * Applies all rules and merges their violations.
  *
+ * <p>Independently of the plugins, the pipeline needs three fields to work at all: {@code transactionId} (deduplication
+ * key), {@code customerId} (partition key) and {@code timestamp} (event time). Their absence is always a violation, so a
+ * deployment without the schema plugin cannot crash the job with a null key.
+ *
  * <p>A plugin that throws is treated as a violation ({@value #RULE_ERROR}) instead of propagating: a faulty plugin
  * must never crash the job into a restart loop, and the transaction is rejected rather than silently accepted.
  */
 public final class ValidateTransactionService implements ValidateTransactionUseCase {
 
     public static final String RULE_ERROR = "RULE_ERROR";
+    public static final String TRANSACTION_ID_MISSING = "PIPELINE_TRANSACTION_ID_MISSING";
+    public static final String CUSTOMER_ID_MISSING = "PIPELINE_CUSTOMER_ID_MISSING";
+    public static final String TIMESTAMP_MISSING = "PIPELINE_TIMESTAMP_MISSING";
 
     private final List<TransactionValidationRule> rules;
 
@@ -30,6 +37,15 @@ public final class ValidateTransactionService implements ValidateTransactionUseC
     @Override
     public ValidationResult validate(Transaction transaction, ValidationContext context) {
         List<Violation> violations = new ArrayList<>();
+        if (isBlank(transaction.transactionId())) {
+            violations.add(new Violation(TRANSACTION_ID_MISSING, "transactionId is required (deduplication key)"));
+        }
+        if (isBlank(transaction.customerId())) {
+            violations.add(new Violation(CUSTOMER_ID_MISSING, "customerId is required (partition key)"));
+        }
+        if (transaction.timestamp() == null) {
+            violations.add(new Violation(TIMESTAMP_MISSING, "timestamp is required (event time)"));
+        }
         for (TransactionValidationRule rule : rules) {
             try {
                 violations.addAll(rule.validate(transaction, context).violations());
@@ -38,5 +54,9 @@ public final class ValidateTransactionService implements ValidateTransactionUseC
             }
         }
         return ValidationResult.invalid(violations);
+    }
+
+    private static boolean isBlank(String s) {
+        return s == null || s.isBlank();
     }
 }
