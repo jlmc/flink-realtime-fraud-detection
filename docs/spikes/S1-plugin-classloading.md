@@ -28,3 +28,13 @@ inside `RichMapFunction#open`), run on the real Docker Compose cluster (1 JM + 1
 ## Spike S3 (same session): JDBC connector
 
 `flink-connector-jdbc` has no release for Flink 2.x on Maven Central (latest `3.4.0-1.20`). The PostgreSQL sink is therefore a custom Sink V2 with plain JDBC.
+
+## Operational notes from the first real deployment (Session Mode, Compose cluster)
+
+- Submitting through `POST /jars/:id/run` did **not** apply the cluster's `parallelism.default: 3`: all operators came up with
+  parallelism 1. Passing `"parallelism": 3` in the request body fixes it, so the deploy script must always send it.
+- With `execution.checkpointing.*` from the cluster `config.yaml`, the job took a checkpoint every 10 s into
+  `s3://flink-state/checkpoints/<job-id>/chk-N` (RocksDB, exactly-once mode, retained on cancellation), as configured.
+- Smoke test results over real Kafka (16 messages): duplicate collapsed to one result, an out-of-order event still produced the
+  PT -> US -> PT alert, 6th transaction within a minute raised the velocity alert, and the real plugin rules, a poison message and a
+  message without customer all went to `transaction.invalid.events`.
