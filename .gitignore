@@ -1,0 +1,27 @@
+# Maven
+target/
+dependency-reduced-pom.xml
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+.settings/
+.classpath
+.project
+
+# OS
+.DS_Store
+
+# Local environment / secrets (use .env.example as template)
+.env
+
+# Logs
+*.log
+
+# Local runtime data
+/.data/
+
+# Staged runtime artifacts (see scripts/stage-dist.sh)
+/dist/*/*
+!/dist/*/.gitkeep
