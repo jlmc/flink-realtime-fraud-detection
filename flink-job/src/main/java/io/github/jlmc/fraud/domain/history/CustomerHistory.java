@@ -33,25 +33,45 @@ public record CustomerHistory(List<HistoryEntry> entries) {
     }
 
     /**
-     * Returns a new history with {@code entry} appended, dropping entries older than {@code retention}
-     * (relative to {@code entry}) and keeping at most {@code maxEntries} of the newest ones.
+     * Returns a new history with {@code entry} inserted in event-time order (after entries with the same timestamp),
+     * dropping entries older than {@code retention} (relative to the newest entry) and keeping at most
+     * {@code maxEntries} of the newest ones.
+     *
+     * <p>Normally entries arrive in order; out-of-order insertion only happens for late events that the pipeline
+     * chooses to tolerate.
      */
     public CustomerHistory append(HistoryEntry entry, Duration retention, int maxEntries) {
-        long oldestKept = entry.timestampMillis() - retention.toMillis();
         List<HistoryEntry> next = new ArrayList<>(entries.size() + 1);
-        for (HistoryEntry e : entries) {
-            if (e.timestampMillis() >= oldestKept) {
-                next.add(e);
-            }
+        next.addAll(entries);
+        int index = next.size();
+        while (index > 0 && next.get(index - 1).timestampMillis() > entry.timestampMillis()) {
+            index--;
         }
-        next.add(entry);
-        int excess = next.size() - maxEntries;
-        return new CustomerHistory(excess > 0 ? next.subList(excess, next.size()) : next);
+        next.add(index, entry);
+
+        long oldestKept = next.get(next.size() - 1).timestampMillis() - retention.toMillis();
+        int from = 0;
+        while (from < next.size() && next.get(from).timestampMillis() < oldestKept) {
+            from++;
+        }
+        from = Math.max(from, next.size() - maxEntries);
+        return new CustomerHistory(next.subList(from, next.size()));
+    }
+
+    /** Returns a history without the entries older than {@code retention} relative to {@code nowMillis}. */
+    public CustomerHistory evictOlderThan(long nowMillis, Duration retention) {
+        long oldestKept = nowMillis - retention.toMillis();
+        return new CustomerHistory(entries.stream().filter(e -> e.timestampMillis() >= oldestKept).toList());
+    }
+
+    public boolean isEmpty() {
+        return entries.isEmpty();
     }
 
     /**
      * Builds the {@link RiskContext} for {@code transaction}. Windows are {@code (t - window, t]} where {@code t}
-     * is the transaction's event time, and include the transaction itself.
+     * is the transaction's event time, and include the transaction itself. Entries after {@code t} (possible only
+     * when a late event is tolerated) are ignored.
      */
     public RiskContext contextFor(Transaction transaction) {
         long t = transaction.timestamp().toEpochMilli();
@@ -62,7 +82,9 @@ public record CustomerHistory(List<HistoryEntry> entries) {
         List<String> recentCountries = new ArrayList<>();
         BigDecimal sum = BigDecimal.ZERO;
 
-        for (HistoryEntry e : entries) {
+        List<HistoryEntry> past = entries.stream().filter(e -> e.timestampMillis() <= t).toList();
+
+        for (HistoryEntry e : past) {
             long age = t - e.timestampMillis();
             if (age < ONE_MINUTE.toMillis()) {
                 lastMinute++;
@@ -76,11 +98,11 @@ public record CustomerHistory(List<HistoryEntry> entries) {
             sum = sum.add(e.amount());
         }
 
-        String previousCountry = entries.isEmpty() ? null : entries.get(entries.size() - 1).country();
-        BigDecimal average = entries.isEmpty()
+        String previousCountry = past.isEmpty() ? null : past.get(past.size() - 1).country();
+        BigDecimal average = past.isEmpty()
                 ? null
-                : sum.divide(BigDecimal.valueOf(entries.size()), 4, RoundingMode.HALF_UP);
+                : sum.divide(BigDecimal.valueOf(past.size()), 4, RoundingMode.HALF_UP);
 
-        return new RiskContext(lastMinute, lastTenMinutes, previousCountry, recentCountries, average, entries.size());
+        return new RiskContext(lastMinute, lastTenMinutes, previousCountry, recentCountries, average, past.size());
     }
 }

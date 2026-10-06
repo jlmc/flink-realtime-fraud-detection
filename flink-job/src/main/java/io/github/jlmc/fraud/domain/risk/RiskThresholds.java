@@ -1,5 +1,6 @@
 package io.github.jlmc.fraud.domain.risk;
 
+import java.io.Serializable;
 import java.math.BigDecimal;
 import java.time.Duration;
 
@@ -20,7 +21,7 @@ public record RiskThresholds(
         BigDecimal anomalyMultiplier,
         int anomalyMinHistory,
         Duration historyRetention,
-        int maxHistoryEntries) {
+        int maxHistoryEntries) implements Serializable {
 
     public static RiskThresholds defaults() {
         return new RiskThresholds(

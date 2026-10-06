@@ -86,4 +86,35 @@ class CustomerHistoryTest {
     void missingAmountCountsAsZero() {
         assertThat(new HistoryEntry(1L, null, null).amount()).isEqualByComparingTo("0");
     }
+
+    @Test
+    void lateEntriesAreInsertedInEventTimeOrder() {
+        CustomerHistory h = CustomerHistory.empty()
+                .append(entry(0, "1", "PT"), Duration.ofHours(1), 10)
+                .append(entry(120, "3", "PT"), Duration.ofHours(1), 10)
+                .append(entry(60, "2", "PT"), Duration.ofHours(1), 10);
+
+        assertThat(h.entries()).extracting(e -> e.amount().intValue()).containsExactly(1, 2, 3);
+    }
+
+    @Test
+    void entriesAfterTheEvaluatedTransactionAreIgnored() {
+        CustomerHistory h = new CustomerHistory(java.util.List.of(entry(0, "10", "PT"), entry(100, "999", "US")));
+
+        RiskContext ctx = h.contextFor(tx(50, "5", "PT"));
+
+        assertThat(ctx.transactionsLastMinute()).isEqualTo(2);
+        assertThat(ctx.amountLastTenMinutes()).isEqualByComparingTo("15");
+        assertThat(ctx.recentCountries()).containsExactly("PT");
+        assertThat(ctx.recentTransactionCount()).isEqualTo(1);
+    }
+
+    @Test
+    void evictOlderThanDropsExpiredEntries() {
+        CustomerHistory h = new CustomerHistory(java.util.List.of(entry(0, "1", "PT"), entry(600, "2", "PT")));
+
+        assertThat(h.evictOlderThan(T0.plusSeconds(700).toEpochMilli(), Duration.ofMinutes(5)).entries())
+                .extracting(e -> e.amount().intValue()).containsExactly(2);
+        assertThat(h.evictOlderThan(T0.plusSeconds(2000).toEpochMilli(), Duration.ofMinutes(5)).isEmpty()).isTrue();
+    }
 }
