@@ -31,6 +31,7 @@
         <slf4j.version>2.0.17</slf4j.version>
         <postgresql.version>42.7.13</postgresql.version>
         <junit.version>5.13.4</junit.version>
+        <archunit.version>1.5.1</archunit.version>
         <assertj.version>3.27.3</assertj.version>
 
         <maven-compiler-plugin.version>3.14.0</maven-compiler-plugin.version>
@@ -84,6 +85,11 @@
                 <groupId>org.assertj</groupId>
                 <artifactId>assertj-core</artifactId>
                 <version>${assertj.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.tngtech.archunit</groupId>
+                <artifactId>archunit</artifactId>
+                <version>${archunit.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
