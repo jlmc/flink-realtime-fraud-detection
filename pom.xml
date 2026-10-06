@@ -14,6 +14,7 @@
     <modules>
         <module>validation-api</module>
         <module>validation-rules</module>
+        <module>flink-job</module>
     </modules>
 
     <properties>
@@ -27,6 +28,8 @@
         <flink.version>2.2.1</flink.version>
         <flink.kafka.connector.version>5.0.0-2.2</flink.kafka.connector.version>
 
+        <slf4j.version>2.0.17</slf4j.version>
+        <postgresql.version>42.7.13</postgresql.version>
         <junit.version>5.13.4</junit.version>
         <assertj.version>3.27.3</assertj.version>
 
@@ -44,6 +47,31 @@
                 <groupId>io.github.jlmc</groupId>
                 <artifactId>validation-api</artifactId>
                 <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.flink</groupId>
+                <artifactId>flink-streaming-java</artifactId>
+                <version>${flink.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.flink</groupId>
+                <artifactId>flink-clients</artifactId>
+                <version>${flink.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.flink</groupId>
+                <artifactId>flink-connector-kafka</artifactId>
+                <version>${flink.kafka.connector.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.slf4j</groupId>
+                <artifactId>slf4j-api</artifactId>
+                <version>${slf4j.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.postgresql</groupId>
+                <artifactId>postgresql</artifactId>
+                <version>${postgresql.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.junit</groupId>
