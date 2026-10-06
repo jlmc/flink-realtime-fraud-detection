@@ -34,11 +34,13 @@ public record JobConfig(
      * {@link #toString()} never prints it.
      */
     public record PostgresConfig(String url, String user, String password,
+                                 int poolSize, long connectionTimeoutMillis,
                                  int batchSize, long flushIntervalMillis, int maxRetrySeconds) implements Serializable {
 
         @Override
         public String toString() {
-            return "PostgresConfig[url=" + url + ", user=" + user + ", password=***, batchSize=" + batchSize
+            return "PostgresConfig[url=" + url + ", user=" + user + ", password=***, poolSize=" + poolSize
+                    + ", connectionTimeoutMillis=" + connectionTimeoutMillis + ", batchSize=" + batchSize
                     + ", flushIntervalMillis=" + flushIntervalMillis + ", maxRetrySeconds=" + maxRetrySeconds + "]";
         }
     }
@@ -69,6 +71,8 @@ public record JobConfig(
                         l.get("postgres.url", "jdbc:postgresql://postgres:5432/fraud"),
                         l.get("postgres.user", "fraud"),
                         l.get("postgres.password", "fraud"),
+                        l.getInt("postgres.pool-size", 4),
+                        l.getInt("postgres.connection-timeout-ms", 5000),
                         l.getInt("postgres.batch-size", 500),
                         l.getInt("postgres.flush-interval-ms", 200),
                         l.getInt("postgres.max-retry-seconds", 60)));

@@ -14,7 +14,6 @@ import java.sql.SQLException;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
-import java.util.Properties;
 
 /**
  * PostgreSQL implementation of the repository port.
@@ -45,25 +44,19 @@ public final class JdbcTransactionRepository implements TransactionRepository {
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
-    private final String url;
-    private final Properties properties = new Properties();
-    private Connection connection;
+    private final PooledDataSources.Lease pool;
 
-    public JdbcTransactionRepository(String url, String user, String password) {
-        this.url = url;
-        properties.setProperty("user", user);
-        properties.setProperty("password", password);
-        properties.setProperty("ApplicationName", "fraud-flink-job");
-        properties.setProperty("connectTimeout", "5");     // seconds
-        properties.setProperty("socketTimeout", "30");     // a hung database must not block the task forever
-        properties.setProperty("tcpKeepAlive", "true");
-        properties.setProperty("reWriteBatchedInserts", "true");
+    /** Takes ownership of the lease: {@link #close()} gives the pool reference back. */
+    public JdbcTransactionRepository(PooledDataSources.Lease pool) {
+        this.pool = pool;
     }
 
     @Override
     public void saveAll(List<PersistableEvent> batch) {
-        try {
-            Connection c = connection();
+        // The connection is borrowed for this batch only; closing it returns it to the pool. Hikari rolls back
+        // anything uncommitted and evicts connections that fail with connection-level errors, so no reconnect logic
+        // is needed here.
+        try (Connection c = pool.dataSource().getConnection()) {
             try (PreparedStatement transactions = c.prepareStatement(INSERT_TRANSACTION);
                  PreparedStatement scores = c.prepareStatement(INSERT_RISK_SCORE);
                  PreparedStatement alerts = c.prepareStatement(INSERT_FRAUD_ALERT)) {
@@ -91,12 +84,13 @@ public final class JdbcTransactionRepository implements TransactionRepository {
                     alerts.executeBatch();
                 }
                 c.commit();
+            } catch (SQLException | JsonProcessingException e) {
+                rollbackQuietly(c);
+                throw e;
             }
         } catch (SQLException e) {
-            rollbackAndReset();
             throw SqlErrors.classify("Could not persist a batch of " + batch.size(), e);
         } catch (JsonProcessingException e) {
-            rollbackAndReset();
             throw PersistenceException.recordRejected("Cannot serialise risk reasons", e);
         }
     }
@@ -122,44 +116,16 @@ public final class JdbcTransactionRepository implements TransactionRepository {
         ps.setObject(6, OffsetDateTime.ofInstant(r.timestamp(), ZoneOffset.UTC));
     }
 
-    private Connection connection() throws SQLException {
-        if (connection == null || connection.isClosed()) {
-            Connection c = new org.postgresql.Driver().connect(url, properties);
-            if (c == null) {
-                throw new SQLException("Not a PostgreSQL JDBC url: " + url, "08001");
-            }
-            c.setAutoCommit(false);
-            connection = c;
-        }
-        return connection;
-    }
-
-    /** After any failure the connection state is unknown: discard it, the next attempt opens a fresh one. */
-    private void rollbackAndReset() {
-        if (connection != null) {
-            try {
-                connection.rollback();
-            } catch (SQLException ignored) {
-                // the connection is probably broken, closing it below is what matters
-            }
-            closeQuietly();
-        }
-    }
-
-    private void closeQuietly() {
+    private static void rollbackQuietly(Connection c) {
         try {
-            connection.close();
+            c.rollback();
         } catch (SQLException ignored) {
-            // nothing useful to do
-        } finally {
-            connection = null;
+            // the connection is probably broken; the pool will evict it
         }
     }
 
     @Override
     public void close() {
-        if (connection != null) {
-            closeQuietly();
-        }
+        pool.close();
     }
 }

@@ -49,6 +49,8 @@ class JobConfigTest {
         assertThat(defaults.postgres().url()).isEqualTo("jdbc:postgresql://postgres:5432/fraud");
         assertThat(defaults.postgres().batchSize()).isEqualTo(500);
         assertThat(defaults.postgres().maxRetrySeconds()).isEqualTo(60);
+        assertThat(defaults.postgres().poolSize()).isEqualTo(4);
+        assertThat(defaults.postgres().connectionTimeoutMillis()).isEqualTo(5000);
 
         JobConfig overridden = JobConfig.from(Map.of(), Map.of("POSTGRES_URL", "jdbc:postgresql://db:5432/x", "POSTGRES_PASSWORD", "s3cret"));
         assertThat(overridden.postgres().url()).isEqualTo("jdbc:postgresql://db:5432/x");

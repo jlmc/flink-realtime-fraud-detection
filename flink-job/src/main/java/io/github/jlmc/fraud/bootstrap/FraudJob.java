@@ -4,6 +4,8 @@ import io.github.jlmc.fraud.adapter.in.kafka.KafkaTransactionSource;
 import io.github.jlmc.fraud.adapter.out.kafka.KafkaSinks;
 import io.github.jlmc.fraud.adapter.out.persistence.BatchingRepositorySink;
 import io.github.jlmc.fraud.adapter.out.persistence.JdbcTransactionRepository;
+import io.github.jlmc.fraud.adapter.out.persistence.PoolConfig;
+import io.github.jlmc.fraud.adapter.out.persistence.PooledDataSources;
 import io.github.jlmc.fraud.adapter.out.persistence.RetryPolicy;
 import io.github.jlmc.fraud.adapter.out.plugin.ServiceLoaderValidationRuleProvider;
 import io.github.jlmc.fraud.application.model.RiskOutcome;
@@ -49,7 +51,9 @@ public final class FraudJob {
                 .name("kafka-invalid-events").uid("kafka-invalid-events");
 
         JobConfig.PostgresConfig pg = config.postgres();
-        TransactionRepositoryFactory repositories = () -> new JdbcTransactionRepository(pg.url(), pg.user(), pg.password());
+        PoolConfig pool = new PoolConfig(pg.url(), pg.user(), pg.password(), pg.poolSize(), pg.connectionTimeoutMillis());
+        // One pool per TaskManager, shared by all sink subtasks running there (see PooledDataSources).
+        TransactionRepositoryFactory repositories = () -> new JdbcTransactionRepository(PooledDataSources.acquire(pool));
         RetryPolicy retry = new RetryPolicy(Duration.ofSeconds(pg.maxRetrySeconds()), Duration.ofMillis(200), Duration.ofSeconds(5), 2.0);
         streams.persistable()
                 .sinkTo(new BatchingRepositorySink(repositories, pg.batchSize(), pg.flushIntervalMillis(), retry))
