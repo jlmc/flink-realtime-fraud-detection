@@ -29,6 +29,7 @@
         <flink.kafka.connector.version>5.0.0-2.2</flink.kafka.connector.version>
 
         <slf4j.version>2.0.17</slf4j.version>
+        <hikaricp.version>7.0.2</hikaricp.version>
         <jackson.version>2.22.3</jackson.version>
         <postgresql.version>42.7.13</postgresql.version>
         <junit.version>5.13.4</junit.version>
@@ -98,6 +99,11 @@
                 <groupId>org.slf4j</groupId>
                 <artifactId>slf4j-api</artifactId>
                 <version>${slf4j.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.zaxxer</groupId>
+                <artifactId>HikariCP</artifactId>
+                <version>${hikaricp.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.postgresql</groupId>
