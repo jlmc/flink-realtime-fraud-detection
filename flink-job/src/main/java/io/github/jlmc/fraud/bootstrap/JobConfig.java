@@ -26,7 +26,22 @@ public record JobConfig(
         Duration watermarkIdleness,
         Duration allowedLateness,
         Duration dedupRetention,
-        RiskThresholds thresholds) implements Serializable {
+        RiskThresholds thresholds,
+        PostgresConfig postgres) implements Serializable {
+
+    /**
+     * PostgreSQL connection and write tuning. The password has a local-development default only (see .env.example);
+     * {@link #toString()} never prints it.
+     */
+    public record PostgresConfig(String url, String user, String password,
+                                 int batchSize, long flushIntervalMillis, int maxRetrySeconds) implements Serializable {
+
+        @Override
+        public String toString() {
+            return "PostgresConfig[url=" + url + ", user=" + user + ", password=***, batchSize=" + batchSize
+                    + ", flushIntervalMillis=" + flushIntervalMillis + ", maxRetrySeconds=" + maxRetrySeconds + "]";
+        }
+    }
 
     public static JobConfig from(Map<String, String> args, Map<String, String> env) {
         Lookup l = new Lookup(args, env);
@@ -49,7 +64,14 @@ public record JobConfig(
                         new BigDecimal(l.get("risk.anomaly-multiplier", d.anomalyMultiplier().toPlainString())),
                         l.getInt("risk.anomaly-min-history", d.anomalyMinHistory()),
                         d.historyRetention(),
-                        d.maxHistoryEntries()));
+                        d.maxHistoryEntries()),
+                new PostgresConfig(
+                        l.get("postgres.url", "jdbc:postgresql://postgres:5432/fraud"),
+                        l.get("postgres.user", "fraud"),
+                        l.get("postgres.password", "fraud"),
+                        l.getInt("postgres.batch-size", 500),
+                        l.getInt("postgres.flush-interval-ms", 200),
+                        l.getInt("postgres.max-retry-seconds", 60)));
     }
 
     /** Parses {@code --key value} pairs. A key without a value is an error: silently ignoring it hides typos. */

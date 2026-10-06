@@ -56,9 +56,12 @@ class PipelineAssemblerTest {
         DataStream<String> late = streams.late()
                 .map(t -> "LATE " + t.transactionId())
                 .returns(Types.STRING);
+        DataStream<String> persist = streams.persistable()
+                .map(p -> "PERSIST " + p.transaction().transactionId() + " " + p.status() + " alert=" + p.raiseAlert())
+                .returns(Types.STRING);
 
         List<String> lines = new ArrayList<>();
-        try (CloseableIterator<String> it = risk.union(invalid, late).executeAndCollect("pipeline-test")) {
+        try (CloseableIterator<String> it = risk.union(invalid, late, persist).executeAndCollect("pipeline-test")) {
             it.forEachRemaining(lines::add);
         }
         return lines;
@@ -66,7 +69,8 @@ class PipelineAssemblerTest {
 
     @Test
     void aNormalTransactionIsScoredLow() throws Exception {
-        assertThat(run(json("t1", "c1", "13:00:00", "25.00", "PT"))).containsExactly("RISK t1 LOW []");
+        assertThat(run(json("t1", "c1", "13:00:00", "25.00", "PT")))
+                .containsExactlyInAnyOrder("RISK t1 LOW []", "PERSIST t1 PROCESSED alert=false");
     }
 
     @Test
@@ -74,7 +78,7 @@ class PipelineAssemblerTest {
         var out = run(json("t1", "c1", "13:00:00", "25", "PT"), json("t1", "c1", "13:00:00", "25", "PT"),
                 json("t1", "c1", "13:00:00", "25", "PT"));
 
-        assertThat(out).containsExactly("RISK t1 LOW []");
+        assertThat(out).containsExactlyInAnyOrder("RISK t1 LOW []", "PERSIST t1 PROCESSED alert=false");
     }
 
     @Test
@@ -89,7 +93,8 @@ class PipelineAssemblerTest {
         assertThat(out).anyMatch(l -> l.startsWith("INVALID DESERIALIZATION MALFORMED_PAYLOAD"));
         assertThat(out).anyMatch(l -> l.startsWith("INVALID VALIDATION NEGATIVE_AMOUNT bad"));
         assertThat(out).anyMatch(l -> l.startsWith("INVALID VALIDATION") && l.contains("PIPELINE_CUSTOMER_ID_MISSING"));
-        assertThat(out).hasSize(4);
+        assertThat(out).contains("PERSIST ok PROCESSED alert=false");
+        assertThat(out).hasSize(5); // ok: RISK + PERSIST, plus 3 invalid
     }
 
     @Test
@@ -100,7 +105,8 @@ class PipelineAssemblerTest {
                 json("second", "c1", "13:01:00", "5", "US"));
 
         assertThat(out).contains("RISK third MEDIUM [SUSPICIOUS_COUNTRY_CHANGE]");
-        assertThat(out).hasSize(3);
+        assertThat(out.stream().filter(l -> l.startsWith("RISK"))).hasSize(3);
+        assertThat(out.stream().filter(l -> l.startsWith("PERSIST"))).hasSize(3);
     }
 
     @Test
@@ -111,6 +117,6 @@ class PipelineAssemblerTest {
                 json("t5", "c1", "13:00:20", "1", "PT"), json("t4", "c1", "13:00:15", "1", "PT"));
 
         assertThat(out).contains("RISK t6 MEDIUM [HIGH_TRANSACTION_VELOCITY]");
-        assertThat(out.stream().filter(l -> l.contains("HIGH_TRANSACTION_VELOCITY"))).hasSize(1);
+        assertThat(out.stream().filter(l -> l.startsWith("RISK") && l.contains("HIGH_TRANSACTION_VELOCITY"))).hasSize(1);
     }
 }

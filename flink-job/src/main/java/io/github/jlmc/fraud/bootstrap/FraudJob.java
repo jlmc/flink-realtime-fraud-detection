@@ -2,12 +2,18 @@ package io.github.jlmc.fraud.bootstrap;
 
 import io.github.jlmc.fraud.adapter.in.kafka.KafkaTransactionSource;
 import io.github.jlmc.fraud.adapter.out.kafka.KafkaSinks;
+import io.github.jlmc.fraud.adapter.out.persistence.BatchingRepositorySink;
+import io.github.jlmc.fraud.adapter.out.persistence.JdbcTransactionRepository;
+import io.github.jlmc.fraud.adapter.out.persistence.RetryPolicy;
 import io.github.jlmc.fraud.adapter.out.plugin.ServiceLoaderValidationRuleProvider;
 import io.github.jlmc.fraud.application.model.RiskOutcome;
+import io.github.jlmc.fraud.application.port.out.TransactionRepositoryFactory;
 import io.github.jlmc.fraud.application.port.out.ValidationRuleProviderFactory;
 import io.github.jlmc.fraud.validation.RiskResult;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+
+import java.time.Duration;
 
 /** Entry point. Checkpointing, state backend and restart strategy come from the cluster configuration. */
 public final class FraudJob {
@@ -42,7 +48,12 @@ public final class FraudJob {
                 .sinkTo(KafkaSinks.invalidEvents(config.kafkaBootstrapServers(), config.invalidTopic()))
                 .name("kafka-invalid-events").uid("kafka-invalid-events");
 
-        // streams.late() and the PostgreSQL sink are attached in the persistence milestone.
+        JobConfig.PostgresConfig pg = config.postgres();
+        TransactionRepositoryFactory repositories = () -> new JdbcTransactionRepository(pg.url(), pg.user(), pg.password());
+        RetryPolicy retry = new RetryPolicy(Duration.ofSeconds(pg.maxRetrySeconds()), Duration.ofMillis(200), Duration.ofSeconds(5), 2.0);
+        streams.persistable()
+                .sinkTo(new BatchingRepositorySink(repositories, pg.batchSize(), pg.flushIntervalMillis(), retry))
+                .name("postgres").uid("postgres");
 
         env.execute("transaction-fraud-risk");
     }

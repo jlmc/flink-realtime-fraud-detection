@@ -42,4 +42,24 @@ class JobConfigTest {
         assertThatThrownBy(() -> JobConfig.parseArgs(new String[] {"--a"})).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> JobConfig.parseArgs(new String[] {"a", "1"})).isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void postgresDefaultsMatchTheLocalComposeStackAndEnvironmentOverridesThem() {
+        JobConfig defaults = JobConfig.from(Map.of(), Map.of());
+        assertThat(defaults.postgres().url()).isEqualTo("jdbc:postgresql://postgres:5432/fraud");
+        assertThat(defaults.postgres().batchSize()).isEqualTo(500);
+        assertThat(defaults.postgres().maxRetrySeconds()).isEqualTo(60);
+
+        JobConfig overridden = JobConfig.from(Map.of(), Map.of("POSTGRES_URL", "jdbc:postgresql://db:5432/x", "POSTGRES_PASSWORD", "s3cret"));
+        assertThat(overridden.postgres().url()).isEqualTo("jdbc:postgresql://db:5432/x");
+        assertThat(overridden.postgres().password()).isEqualTo("s3cret");
+    }
+
+    @Test
+    void thePasswordNeverAppearsInLogs() {
+        JobConfig c = JobConfig.from(Map.of("postgres.password", "s3cret"), Map.of());
+
+        assertThat(c.postgres().toString()).doesNotContain("s3cret").contains("password=***");
+        assertThat(c.toString()).doesNotContain("s3cret");
+    }
 }

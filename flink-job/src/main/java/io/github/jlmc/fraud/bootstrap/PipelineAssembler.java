@@ -6,10 +6,14 @@ import io.github.jlmc.fraud.adapter.in.flink.RiskEvaluationFunction;
 import io.github.jlmc.fraud.adapter.in.flink.ValidationProcessFunction;
 import io.github.jlmc.fraud.application.model.IncomingMessage;
 import io.github.jlmc.fraud.application.model.InvalidEvent;
+import io.github.jlmc.fraud.application.model.PersistableEvent;
 import io.github.jlmc.fraud.application.model.RiskOutcome;
 import io.github.jlmc.fraud.application.port.out.ValidationRuleProviderFactory;
+import io.github.jlmc.fraud.application.usecase.PersistableEvents;
 import io.github.jlmc.fraud.validation.Transaction;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.api.common.functions.MapFunction;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.java.functions.KeySelector;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
@@ -22,7 +26,7 @@ import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
  *                |
  *              keyBy(transactionId) -> dedup -> watermarks -> keyBy(customerId) -> risk --late--> (late transactions)
  *                                                                                    |
- *                                                                                  outcomes
+ *                                                                                  outcomes ---+--- (late) ---> persistable --> PostgreSQL
  * </pre>
  */
 public final class PipelineAssembler {
@@ -31,7 +35,8 @@ public final class PipelineAssembler {
     public record Streams(
             DataStream<RiskOutcome> outcomes,
             DataStream<InvalidEvent> invalid,
-            DataStream<Transaction> late) {
+            DataStream<Transaction> late,
+            DataStream<PersistableEvent> persistable) {
     }
 
     private PipelineAssembler() {
@@ -63,9 +68,33 @@ public final class PipelineAssembler {
                 .name("risk-evaluation")
                 .uid("risk-evaluation");
 
-        return new Streams(outcomes,
-                valid.getSideOutput(PipelineTags.INVALID),
-                outcomes.getSideOutput(PipelineTags.LATE));
+        DataStream<Transaction> late = outcomes.getSideOutput(PipelineTags.LATE);
+
+        DataStream<PersistableEvent> persistable = outcomes
+                .map(new ProcessedToPersistable())
+                .returns(TypeInformation.of(PersistableEvent.class))
+                .name("to-persistable-processed")
+                .uid("to-persistable-processed")
+                .union(late.map(new LateToPersistable())
+                        .returns(TypeInformation.of(PersistableEvent.class))
+                        .name("to-persistable-late")
+                        .uid("to-persistable-late"));
+
+        return new Streams(outcomes, valid.getSideOutput(PipelineTags.INVALID), late, persistable);
+    }
+
+    public static class ProcessedToPersistable implements MapFunction<RiskOutcome, PersistableEvent> {
+        @Override
+        public PersistableEvent map(RiskOutcome outcome) {
+            return PersistableEvents.processed(outcome);
+        }
+    }
+
+    public static class LateToPersistable implements MapFunction<Transaction, PersistableEvent> {
+        @Override
+        public PersistableEvent map(Transaction transaction) {
+            return PersistableEvents.late(transaction);
+        }
     }
 
     public static class TransactionIdKey implements KeySelector<Transaction, String> {
