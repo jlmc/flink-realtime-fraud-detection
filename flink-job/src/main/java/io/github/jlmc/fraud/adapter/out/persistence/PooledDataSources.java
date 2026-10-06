@@ -95,20 +95,32 @@ public final class PooledDataSources {
         postgres.setUser(c.user());
         postgres.setPassword(c.password());
         postgres.setApplicationName("fraud-flink-job");
-        postgres.setConnectTimeout(5);          // seconds, for the TCP connect
-        postgres.setSocketTimeout(30);          // seconds: a hung database must not block a writer forever
+        postgres.setLoginTimeout(5);            // seconds, the whole login handshake (connectTimeout only covers the TCP connect)
+        postgres.setConnectTimeout(5);          // seconds, TCP connect
+        postgres.setSocketTimeout(30);          // seconds; HikariCP's "Rapid Recovery" advice: at least 30 s, so a dead peer is noticed
         postgres.setTcpKeepAlive(true);
         postgres.setReWriteBatchedInserts(true);
+        // Server-side safety net for every pooled session (see docs/decisions/0001):
+        //  statement_timeout                    the SERVER cancels a runaway statement; below socketTimeout so that the clean
+        //                                       SQLSTATE 57014 arrives before the client gives up on the socket
+        //  idle_in_transaction_session_timeout  the server kills a session left inside a transaction. Pooled connections run with
+        //                                       autoCommit=false, so a transaction left open would otherwise hold locks forever
+        //  lock_timeout                         never wait unbounded on a lock
+        // (A TimeZone option here would be ignored: the driver sets the session time zone itself. It does not matter for
+        // correctness, instants are written as UTC OffsetDateTime.)
+        postgres.setOptions("-c statement_timeout=20000 -c idle_in_transaction_session_timeout=60000 -c lock_timeout=10000");
 
         HikariConfig hikari = new HikariConfig();
         hikari.setDataSource(postgres);
         hikari.setPoolName("fraud-postgres");
         hikari.setMaximumPoolSize(c.maxPoolSize());
-        hikari.setMinimumIdle(1);
-        hikari.setAutoCommit(false);            // every batch is an explicit transaction
+        // minimumIdle is deliberately NOT set: HikariCP recommends a fixed-size pool (minimumIdle = maximumPoolSize) for the
+        // best performance and responsiveness. A streaming sink keeps its connections busy anyway.
+        hikari.setAutoCommit(false);            // every batch is an explicit transaction; Hikari rolls back whatever is left open on return
+        hikari.setTransactionIsolation("TRANSACTION_READ_COMMITTED"); // explicit rather than "whatever the driver defaults to"
         hikari.setConnectionTimeout(c.connectionTimeoutMs());
         hikari.setValidationTimeout(Duration.ofSeconds(5).toMillis());
-        hikari.setKeepaliveTime(Duration.ofMinutes(2).toMillis());   // below typical firewall/proxy idle cut-offs
+        hikari.setKeepaliveTime(Duration.ofMinutes(2).toMillis());   // minutes range, below maxLifetime and below typical idle cut-offs
         hikari.setMaxLifetime(Duration.ofMinutes(30).toMillis());
         hikari.setInitializationFailTimeout(-1); // do not fail at start when the database is down: the persister retries
         hikari.setRegisterMbeans(false);
