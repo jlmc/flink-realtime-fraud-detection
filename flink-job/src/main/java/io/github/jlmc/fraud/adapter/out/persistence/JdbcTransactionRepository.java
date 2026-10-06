@@ -37,9 +37,17 @@ public final class JdbcTransactionRepository implements TransactionRepository {
             VALUES (?, ?, ?, ?, ?::jsonb, ?)
             ON CONFLICT (transaction_id) DO NOTHING""";
 
+    /**
+     * The alert is copied from the STORED score row, and only when that row has the level of the event being written.
+     * So an alert always agrees with the score on record: if a replay disagrees with the first write (first LOW, replay
+     * HIGH) no alert appears, because the first write wins everywhere, not table by table. Must run after the score insert.
+     * The decision to alert at all stays in the application layer ({@code raiseAlert}); this only guards consistency.
+     */
     static final String INSERT_FRAUD_ALERT = """
             INSERT INTO fraud_alerts (transaction_id, customer_id, risk_score, risk_level, reasons, event_time)
-            VALUES (?, ?, ?, ?, ?::jsonb, ?)
+            SELECT transaction_id, customer_id, risk_score, risk_level, reasons, event_time
+            FROM risk_scores
+            WHERE transaction_id = ? AND risk_level = ?
             ON CONFLICT (transaction_id) DO NOTHING""";
 
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -71,7 +79,8 @@ public final class JdbcTransactionRepository implements TransactionRepository {
                         anyScore = true;
                     }
                     if (event.raiseAlert()) {
-                        bind(alerts, event.transaction(), event.risk());
+                        alerts.setString(1, event.transaction().transactionId());
+                        alerts.setString(2, event.risk().riskLevel().name());
                         alerts.addBatch();
                         anyAlert = true;
                     }
