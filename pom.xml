@@ -13,6 +13,7 @@
 
     <modules>
         <module>validation-api</module>
+        <module>validation-rules</module>
     </modules>
 
     <properties>
