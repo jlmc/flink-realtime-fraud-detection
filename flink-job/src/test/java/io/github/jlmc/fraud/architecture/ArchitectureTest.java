@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import static com.tngtech.archunit.library.Architectures.layeredArchitecture;
+import static com.tngtech.archunit.library.dependencies.SlicesRuleDefinition.slices;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -37,7 +38,6 @@ class ArchitectureTest {
     void dependenciesPointInwards() {
         layeredArchitecture()
                 .consideringOnlyDependenciesInLayers()
-                .withOptionalLayers(true) // adapters and bootstrap arrive in the next milestone step
                 .layer("Domain").definedBy(BASE + ".domain..")
                 .layer("Application").definedBy(BASE + ".application..")
                 .layer("Adapters").definedBy(BASE + ".adapter..")
@@ -65,6 +65,14 @@ class ArchitectureTest {
                 .that().resideInAPackage(BASE + "..")
                 .should().dependOnClassesThat().resideInAPackage(BASE + ".validation.rules..")
                 .because("rules are plugins discovered at runtime, never referenced by the job")
+                .check(classes);
+    }
+
+    @Test
+    void inboundAndOutboundAdaptersDoNotDependOnEachOther() {
+        slices().matching(BASE + ".adapter.(*)..")
+                .should().notDependOnEachOther()
+                .because("only the bootstrap wires adapters together; they talk through application ports")
                 .check(classes);
     }
 }
