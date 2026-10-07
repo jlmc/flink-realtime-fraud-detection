@@ -75,7 +75,24 @@
             <artifactId>slf4j-api</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-simple</artifactId>
+            <scope>test</scope>
+        </dependency>
 
+        <!-- Flink brings commons-compress 1.26.0, which needs commons-codec at runtime but declares it optional.
+             Testcontainers uses compress to copy files into containers and fails with NoClassDefFoundError without it. -->
+        <dependency>
+            <groupId>commons-codec</groupId>
+            <artifactId>commons-codec</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.awaitility</groupId>
+            <artifactId>awaitility</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>testcontainers-junit-jupiter</artifactId>
@@ -114,6 +131,7 @@
                     <includes>
                         <include>**/*IT.java</include>
                     </includes>
+                    <redirectTestOutputToFile>false</redirectTestOutputToFile>
                     <systemPropertyVariables>
                         <migration.dir>${project.basedir}/../db/migration</migration.dir>
                     </systemPropertyVariables>

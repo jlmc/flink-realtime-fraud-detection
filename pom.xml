@@ -30,6 +30,8 @@
         <flink.kafka.connector.version>5.0.0-2.2</flink.kafka.connector.version>
 
         <slf4j.version>2.0.17</slf4j.version>
+        <commons-codec.version>1.20.0</commons-codec.version>
+        <awaitility.version>4.3.0</awaitility.version>
         <testcontainers.version>2.0.5</testcontainers.version>
         <flyway.version>11.20.3</flyway.version>
         <hikaricp.version>7.0.2</hikaricp.version>
@@ -111,6 +113,16 @@
                 <scope>import</scope>
             </dependency>
             <dependency>
+                <groupId>commons-codec</groupId>
+                <artifactId>commons-codec</artifactId>
+                <version>${commons-codec.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.awaitility</groupId>
+                <artifactId>awaitility</artifactId>
+                <version>${awaitility.version}</version>
+            </dependency>
+            <dependency>
                 <groupId>org.flywaydb</groupId>
                 <artifactId>flyway-core</artifactId>
                 <version>${flyway.version}</version>
@@ -124,6 +136,11 @@
                 <groupId>com.zaxxer</groupId>
                 <artifactId>HikariCP</artifactId>
                 <version>${hikaricp.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.slf4j</groupId>
+                <artifactId>slf4j-simple</artifactId>
+                <version>${slf4j.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.postgresql</groupId>
