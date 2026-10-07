@@ -430,6 +430,15 @@ Every setting of the job is resolved in this order: program argument (`--kafka.b
 Checkpoints, state backend, restart strategy and high availability are cluster settings (see `docker-compose.yml`).
 For the Flink-container run, extra job arguments go after `--`: `./scripts/flink/upload-job.sh -- --postgres.pool-size 2`.
 
+## Why the rules run sequentially
+
+Validation and risk rules are evaluated one after the other for each transaction, not in parallel and not asynchronously:
+they are pure in-memory computations (a thread hand-off costs more), Flink already parallelises across customers, the order of
+`reasons` must be deterministic so a replayed transaction yields an identical alert, and the operator runs in Flink's task thread.
+If a rule needed **I/O** (a remote call, a database lookup) use Flink's **Async I/O**, not threads inside the loop; for heavy CPU,
+measure and raise the operator parallelism; a plugin that blocks needs a time limit, which does not exist yet.
+Details in [ADR 0004](docs/decisions/0004-sequential-rule-evaluation.md).
+
 ## Repository layout, tests and further reading
 
 ```

@@ -20,6 +20,10 @@ import java.util.List;
  *
  * <p>A plugin that throws is treated as a violation ({@value #RULE_ERROR}) instead of propagating: a faulty plugin
  * must never crash the job into a restart loop, and the transaction is rejected rather than silently accepted.
+ *
+ * <p>Rules run sequentially, like the risk rules (see {@link EvaluateRiskService} and
+ * docs/decisions/0004-sequential-rule-evaluation.md). A plugin that blocks (I/O, a lock) stalls the task, and there is no
+ * per-rule time limit yet; that, and Async I/O if a rule needs a remote call, is the improvement to make, not parallel execution.
  */
 public final class ValidateTransactionService implements ValidateTransactionUseCase {
 
