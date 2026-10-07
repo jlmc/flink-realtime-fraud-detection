@@ -36,8 +36,10 @@ public final class JobHarness implements AutoCloseable {
         args.put("topic.transactions", topics.events());
         args.put("topic.risk", topics.risk());
         args.put("topic.invalid", topics.invalid());
+        args.put("topic.alerts", topics.alerts());
         args.put("kafka.consumer-group", topics.consumerGroup());
         args.put("kafka.transactional-id-prefix", "it-" + topics.consumerGroup());
+        args.put("kafka.alerts-transactional-id-prefix", "it-alerts-" + topics.consumerGroup());
         args.put("watermark.out-of-orderness-seconds", "1");
         args.put("watermark.idleness-seconds", "1");
         args.put("postgres.url", db.jdbcUrl());

@@ -35,7 +35,7 @@ public final class KafkaFixture {
     private KafkaFixture() {
     }
 
-    public record Topics(String events, String risk, String invalid, String consumerGroup) {
+    public record Topics(String events, String risk, String invalid, String alerts, String consumerGroup) {
     }
 
     public static String bootstrapServers() {
@@ -45,10 +45,10 @@ public final class KafkaFixture {
     /** Fresh, uniquely named topics. One partition keeps the order of the output easy to assert. */
     public static Topics newTopics() {
         String suffix = COUNTER.incrementAndGet() + "-" + UUID.randomUUID().toString().substring(0, 8);
-        Topics topics = new Topics("events-" + suffix, "risk-" + suffix, "invalid-" + suffix, "group-" + suffix);
+        Topics topics = new Topics("events-" + suffix, "risk-" + suffix, "invalid-" + suffix, "alerts-" + suffix, "group-" + suffix);
         try (AdminClient admin = AdminClient.create(Map.<String, Object>of("bootstrap.servers", bootstrapServers()))) {
             admin.createTopics(List.of(new NewTopic(topics.events(), 1, (short) 1), new NewTopic(topics.risk(), 1, (short) 1),
-                    new NewTopic(topics.invalid(), 1, (short) 1))).all().get();
+                    new NewTopic(topics.invalid(), 1, (short) 1), new NewTopic(topics.alerts(), 1, (short) 1))).all().get();
         } catch (Exception e) {
             throw new IllegalStateException("cannot create topics", e);
         }

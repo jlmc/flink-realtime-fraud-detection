@@ -52,6 +52,7 @@ class PipelineIT {
         args.putAll(overrides);
         job = JobHarness.start(args);
         job.diagnoseWith(() -> "risk topic:    " + JobHarness.ids(KafkaFixture.readAllJson(topics.risk()))
+                + "\nalerts topic:  " + JobHarness.ids(KafkaFixture.readAllJson(topics.alerts()))
                 + "\ninvalid topic: " + KafkaFixture.readAllJson(topics.invalid()).size() + " records"
                 + "\ninput topic:   " + KafkaFixture.readAll(topics.events()).size() + " records"
                 + "\ndatabase:      transactions=" + db.count("transactions") + " risk_scores=" + db.count("risk_scores")
@@ -198,6 +199,112 @@ class PipelineIT {
             assertThat(rs.getString(1)).isEqualTo("burst-6");
             assertThat(rs.getInt(2)).isEqualTo(80);
         }
+    }
+
+    private String[] burst(String prefix, String customer) {
+        return IntStream.rangeClosed(1, 6)
+                .mapToObj(i -> tx(prefix + i, customer, "1000", "EUR", "PT", "m", T0.plusSeconds(5L * (i - 1))))
+                .toArray(String[]::new);
+    }
+
+    @Test
+    void aNormalTransactionProducesAResultButNoAlert() throws Exception {
+        startJob();
+
+        KafkaFixture.send(topics.events(), tx("calm-1", "customer-calm", T0));
+        pushWatermark(T0.plusSeconds(120));
+
+        job.await("the risk result", () -> riskTopicHas("calm-1"));
+        job.await("the PostgreSQL row", () -> countWhere("transaction_id = 'calm-1'") == 1);
+        assertThat(KafkaFixture.readAllJson(topics.alerts())).as("no alert for a LOW result").isEmpty();
+    }
+
+    @Test
+    void aHighRiskTransactionProducesExactlyOneAlertWithEveryReason() throws Exception {
+        startJob();
+
+        KafkaFixture.send(topics.events(), burst("hr-", "customer-hr"));
+        pushWatermark(T0.plusSeconds(300));
+
+        job.await("the alert", () -> !KafkaFixture.readAllJson(topics.alerts()).isEmpty());
+        job.await("the sixth risk result", () -> riskTopicHas("hr-6"));
+        var alerts = KafkaFixture.readAllJson(topics.alerts());
+        assertThat(alerts).singleElement().satisfies(a -> {
+            assertThat(a.get("alertId")).isEqualTo("high-risk-v1-hr-6");
+            assertThat(a.get("transactionId")).isEqualTo("hr-6");
+            assertThat(a.get("customerId")).isEqualTo("customer-hr");
+            assertThat(a.get("riskScore")).isEqualTo(80);
+            assertThat(a.get("riskLevel")).isEqualTo("HIGH");
+            assertThat(a.get("reasons")).isEqualTo(List.of("HIGH_TRANSACTION_VELOCITY", "HIGH_SPENDING_VELOCITY"));
+            assertThat(a.get("transactionTimestamp")).isEqualTo(T0.plusSeconds(25).toString());
+        });
+        assertThat(KafkaFixture.readAllJson(topics.risk()).stream().filter(r -> "hr-6".equals(r.get("transactionId"))))
+                .as("the risk result is still published, the alert is additional").hasSize(1);
+        job.await("the alert row in PostgreSQL", () -> db.count("fraud_alerts") == 1);
+    }
+
+    @Test
+    void theAlertThresholdIsExactlyScoreSeventy() throws Exception {
+        startJob();
+
+        // three small transactions give the customer an average of 10; then a large one.
+        // 6000 in ten minutes: spending velocity (40) + amount anomaly (30) = 70 = HIGH, the lowest score that alerts.
+        // 4000 in ten minutes: amount anomaly (30) only = below the threshold.
+        KafkaFixture.send(topics.events(),
+                tx("at-1", "customer-at", "10", "EUR", "PT", "m", T0), tx("at-2", "customer-at", "10", "EUR", "PT", "m", T0.plusSeconds(1)),
+                tx("at-3", "customer-at", "10", "EUR", "PT", "m", T0.plusSeconds(2)),
+                tx("at-exact", "customer-at", "5970", "EUR", "PT", "m", T0.plusSeconds(3)),
+                tx("bt-1", "customer-bt", "10", "EUR", "PT", "m", T0), tx("bt-2", "customer-bt", "10", "EUR", "PT", "m", T0.plusSeconds(1)),
+                tx("bt-3", "customer-bt", "10", "EUR", "PT", "m", T0.plusSeconds(2)),
+                tx("bt-below", "customer-bt", "4000", "EUR", "PT", "m", T0.plusSeconds(3)));
+        pushWatermark(T0.plusSeconds(300));
+
+        job.await("both results", () -> riskTopicHas("at-exact") && riskTopicHas("bt-below"));
+        var scores = KafkaFixture.readAllJson(topics.risk()).stream()
+                .collect(java.util.stream.Collectors.toMap(r -> r.get("transactionId").toString(), r -> (Integer) r.get("riskScore"), (a, b) -> a));
+        assertThat(scores).containsEntry("at-exact", 70).containsEntry("bt-below", 30);
+        job.await("the alert at exactly 70", () -> JobHarness.ids(KafkaFixture.readAllJson(topics.alerts())).contains("at-exact"));
+        assertThat(JobHarness.ids(KafkaFixture.readAllJson(topics.alerts()))).containsExactly("at-exact");
+    }
+
+    @Test
+    void aMediumRiskResultIsNotAnAlert() throws Exception {
+        startJob();
+
+        KafkaFixture.send(topics.events(),
+                tx("m-1", "customer-m", "40", "EUR", "PT", "m", T0),
+                tx("m-2", "customer-m", "40", "EUR", "US", "m", T0.plusSeconds(60)),
+                tx("m-3", "customer-m", "40", "EUR", "PT", "m", T0.plusSeconds(120)));   // SUSPICIOUS_COUNTRY_CHANGE = 50
+        pushWatermark(T0.plusSeconds(400));
+
+        job.await("the medium result", () -> KafkaFixture.readAllJson(topics.risk()).stream()
+                .anyMatch(r -> "m-3".equals(r.get("transactionId")) && "MEDIUM".equals(r.get("riskLevel"))));
+        assertThat(KafkaFixture.readAllJson(topics.alerts())).isEmpty();
+    }
+
+    @Test
+    void aDuplicatedHighRiskTransactionDoesNotDuplicateTheAlert() throws Exception {
+        startJob();
+
+        String[] once = burst("dd-", "customer-dd");
+        KafkaFixture.send(topics.events(), once);
+        KafkaFixture.send(topics.events(), once);       // Kafka redelivery / producer retry of the whole burst
+        pushWatermark(T0.plusSeconds(300));
+
+        job.await("the alert", () -> !KafkaFixture.readAllJson(topics.alerts()).isEmpty());
+        job.await("the sixth risk result", () -> riskTopicHas("dd-6"));
+        assertThat(JobHarness.ids(KafkaFixture.readAllJson(topics.alerts()))).containsExactly("dd-6");
+    }
+
+    @Test
+    void invalidTransactionsNeverProduceAlerts() throws Exception {
+        startJob();
+
+        KafkaFixture.send(topics.events(), tx("neg", "c", "-5", "EUR", "PT", "m", T0), "this is not json {");
+        pushWatermark(T0.plusSeconds(120));
+
+        job.await("two invalid events", () -> KafkaFixture.readAllJson(topics.invalid()).size() == 2);
+        assertThat(KafkaFixture.readAllJson(topics.alerts())).isEmpty();
     }
 
     @Test
