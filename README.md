@@ -449,12 +449,12 @@ integration-tests/       tests with real Kafka and PostgreSQL (Testcontainers) a
 db/migration/            Flyway migrations (transactions, risk_scores, fraud_alerts)
 docker/, docker-compose.yml   infrastructure
 scripts/                 stage-dist.sh, send-transactions.sh, flink/* operations
-docs/                    alerts, decisions (ADRs), spikes
+docs/                    compose services, alerts, decisions (ADRs), spikes
 PLAN.md                  the original requirements
 ```
 
 Tests, in three layers: unit tests (`mvn test`), integration tests with real containers and a mini Flink cluster (`mvn verify`),
 and scripted scenarios against Compose (this README). See [ADR 0002](docs/decisions/0002-integration-test-strategy.md).
 
-More: [alerts topic](docs/alerts.md) · [decision log](docs/decisions/README.md) · [plugin classloading spike](docs/spikes/S1-plugin-classloading.md) ·
+More: [Compose services explained](docs/compose-services.md) ([PT](docs/compose-services.pt.md)) · [alerts topic](docs/alerts.md) · [decision log](docs/decisions/README.md) · [plugin classloading spike](docs/spikes/S1-plugin-classloading.md) ·
 [JDK 25 spike](docs/spikes/S4-jdk25.md) (the project runs on JDK 17; moving to 25 is the last milestone).
