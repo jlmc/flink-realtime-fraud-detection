@@ -1,0 +1,19 @@
+<component name="ProjectRunConfigurationManager">
+  <!--
+    Runs the job in this JVM (Flink mini cluster) against the Docker Compose infrastructure:
+      docker compose up -d postgres postgres-init-schema kafka kafka-init
+    The module is integration-tests because it is the one that has, on its classpath, the real validation rule JARs and the Flink
+    runtime (provided scope in flink-job). "Include dependencies with 'Provided' scope" is therefore required.
+    Do not run it while the same consumer group is used by a job on the Flink cluster.
+  -->
+  <configuration default="false" name="FraudJob (local)" type="Application" factoryName="Application">
+    <option name="MAIN_CLASS_NAME" value="io.github.jlmc.fraud.bootstrap.FraudJob" />
+    <module name="integration-tests" />
+    <option name="INCLUDE_PROVIDED_SCOPE" value="true" />
+    <option name="PROGRAM_PARAMETERS" value="--kafka.bootstrap-servers localhost:9092 --postgres.url jdbc:postgresql://localhost:5432/fraud --kafka.consumer-group local-ide" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <method v="2">
+      <option name="Make" enabled="true" />
+    </method>
+  </configuration>
+</component>
