@@ -12,8 +12,8 @@ for i in $(seq 1 60); do
   echo "waiting for Kafka ($i/60)"; sleep 2
 done
 
-for topic in transaction.events transaction.risk.events transaction.invalid.events; do
+for topic in transaction.events transaction.risk.events transaction.invalid.events fraud.high-risk.alerts; do
   "$KT" --bootstrap-server "$BOOTSTRAP" --create --if-not-exists \
     --topic "$topic" --partitions "$PARTITIONS" --replication-factor "$REPLICATION"
 done
-"$KT" --bootstrap-server "$BOOTSTRAP" --describe | grep -E "^Topic: transaction\." || true
+"$KT" --bootstrap-server "$BOOTSTRAP" --describe | grep -E "^Topic: (transaction|fraud)\." || true
