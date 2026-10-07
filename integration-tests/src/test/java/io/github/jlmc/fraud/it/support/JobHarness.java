@@ -62,7 +62,7 @@ public final class JobHarness implements AutoCloseable {
         conf.setString("restart-strategy.fixed-delay.delay", "1s");
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment(conf);
         env.setParallelism(2);
-        FraudJob.build(env, JobConfig.from(args, Map.of()), rules);
+        FraudJob.build(env, JobConfig.from(args, Map.of()), rules, FraudJob.defaultRiskRules());
         return new JobHarness(env.executeAsync("it-" + args.get("kafka.consumer-group")));
     }
 

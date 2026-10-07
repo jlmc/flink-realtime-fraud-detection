@@ -37,6 +37,10 @@ class PipelineAssemblerTest {
                 """.formatted(id, customer, amount, country, time);
     }
 
+    private static String declinedJson(String id, String customer, String time, String amount, String country) {
+        return json(id, customer, time, amount, country).replace("\"currency\"", "\"paymentStatus\": \"DECLINED\", \"currency\"");
+    }
+
     private static IncomingMessage message(String payload, long offset) {
         return TransactionJsonParser.parse(payload.getBytes(StandardCharsets.UTF_8), "transaction.events", 0, offset);
     }
@@ -54,7 +58,7 @@ class PipelineAssemblerTest {
 
         JobConfig config = JobConfig.from(Map.of(), Map.of());
         PipelineAssembler.Streams streams = PipelineAssembler.assemble(source, config,
-                () -> () -> List.of(new RejectNegativeAmountRule()));
+                () -> () -> List.of(new RejectNegativeAmountRule()), FraudJob.defaultRiskRules());
 
         DataStream<String> risk = streams.outcomes()
                 .map(o -> "RISK " + o.transaction().transactionId() + " " + o.result().riskLevel() + " " + o.result().reasons())
@@ -117,20 +121,20 @@ class PipelineAssemblerTest {
                 json("first", "c1", "13:00:00", "5", "PT"),
                 json("second", "c1", "13:01:00", "5", "US"));
 
-        assertThat(out).contains("RISK third MEDIUM [SUSPICIOUS_COUNTRY_CHANGE]");
+        assertThat(out).contains("RISK third MEDIUM [STUB_TRAVEL]");
         assertThat(out.stream().filter(l -> l.startsWith("RISK"))).hasSize(3);
         assertThat(out.stream().filter(l -> l.startsWith("PERSIST"))).hasSize(3);
     }
 
     @Test
-    void sixTransactionsInAMinuteTriggerVelocityForTheLastOne() throws Exception {
+    void sixTransactionsInAMinuteTriggerTheVelocityRuleForTheLastOne() throws Exception {
         var out = run(
                 json("t6", "c1", "13:00:25", "1", "PT"), json("t1", "c1", "13:00:00", "1", "PT"),
                 json("t3", "c1", "13:00:10", "1", "PT"), json("t2", "c1", "13:00:05", "1", "PT"),
                 json("t5", "c1", "13:00:20", "1", "PT"), json("t4", "c1", "13:00:15", "1", "PT"));
 
-        assertThat(out).contains("RISK t6 MEDIUM [HIGH_TRANSACTION_VELOCITY]");
-        assertThat(out.stream().filter(l -> l.startsWith("RISK") && l.contains("HIGH_TRANSACTION_VELOCITY"))).hasSize(1);
+        assertThat(out).contains("RISK t6 MEDIUM [STUB_VELOCITY]");
+        assertThat(out.stream().filter(l -> l.startsWith("RISK") && l.contains("STUB_VELOCITY"))).hasSize(1);
     }
 
     @Test
@@ -143,7 +147,15 @@ class PipelineAssemblerTest {
                 json("calm", "c2", "13:00:00", "5", "PT"));
 
         assertThat(out.stream().filter(l -> l.startsWith("ALERT")))
-                .containsExactly("ALERT high-risk-v1-b6 80 [HIGH_TRANSACTION_VELOCITY, HIGH_SPENDING_VELOCITY]");
+                .containsExactly("ALERT high-risk-v1-b6 80 [STUB_SPENDING, STUB_VELOCITY]");
         assertThat(out.stream().filter(l -> l.startsWith("RISK"))).as("risk results are unaffected").hasSize(7);
+    }
+
+    @Test
+    void anUnknownPaymentStatusIsRejectedAsMalformed() throws Exception {
+        var out = run(json("x", "c1", "13:00:00", "10", "PT").replace("\"currency\"", "\"paymentStatus\": \"MAYBE\", \"currency\""));
+
+        assertThat(out).hasSize(1);
+        assertThat(out.get(0)).startsWith("INVALID DESERIALIZATION MALFORMED_PAYLOAD");
     }
 }

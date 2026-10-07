@@ -1,0 +1,3 @@
+io.github.jlmc.fraud.testsupport.StubVelocityRule
+io.github.jlmc.fraud.testsupport.StubSpendingRule
+io.github.jlmc.fraud.testsupport.StubTravelRule

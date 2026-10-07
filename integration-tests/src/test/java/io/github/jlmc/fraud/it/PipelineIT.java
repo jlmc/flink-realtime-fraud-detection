@@ -161,7 +161,7 @@ class PipelineIT {
         pushWatermark(T0.plusSeconds(400));
 
         job.await("the alerting result", () -> KafkaFixture.readAllJson(topics.risk()).stream()
-                .anyMatch(r -> "c-3".equals(r.get("transactionId")) && r.get("reasons").toString().contains("SUSPICIOUS_COUNTRY_CHANGE")));
+                .anyMatch(r -> "c-3".equals(r.get("transactionId")) && r.get("reasons").toString().contains("GEOGRAPHIC_IMPOSSIBILITY")));
     }
 
     @Test
@@ -235,7 +235,7 @@ class PipelineIT {
             assertThat(a.get("customerId")).isEqualTo("customer-hr");
             assertThat(a.get("riskScore")).isEqualTo(80);
             assertThat(a.get("riskLevel")).isEqualTo("HIGH");
-            assertThat(a.get("reasons")).isEqualTo(List.of("HIGH_TRANSACTION_VELOCITY", "HIGH_SPENDING_VELOCITY"));
+            assertThat(a.get("reasons")).isEqualTo(List.of("HIGH_SPENDING_VELOCITY", "HIGH_TRANSACTION_VELOCITY"));
             assertThat(a.get("transactionTimestamp")).isEqualTo(T0.plusSeconds(25).toString());
         });
         assertThat(KafkaFixture.readAllJson(topics.risk()).stream().filter(r -> "hr-6".equals(r.get("transactionId"))))
@@ -274,7 +274,7 @@ class PipelineIT {
         KafkaFixture.send(topics.events(),
                 tx("m-1", "customer-m", "40", "EUR", "PT", "m", T0),
                 tx("m-2", "customer-m", "40", "EUR", "US", "m", T0.plusSeconds(60)),
-                tx("m-3", "customer-m", "40", "EUR", "PT", "m", T0.plusSeconds(120)));   // SUSPICIOUS_COUNTRY_CHANGE = 50
+                tx("m-3", "customer-m", "40", "EUR", "PT", "m", T0.plusSeconds(120)));   // GEOGRAPHIC_IMPOSSIBILITY = 50
         pushWatermark(T0.plusSeconds(400));
 
         job.await("the medium result", () -> KafkaFixture.readAllJson(topics.risk()).stream()

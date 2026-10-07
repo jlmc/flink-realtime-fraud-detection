@@ -29,7 +29,7 @@
             <artifactId>validation-api</artifactId>
         </dependency>
 
-        <!-- The real plugins: the point of these tests is that the job finds them without ever referencing them.
+        <!-- The real plugins (validation rules and fraud rules): the point of these tests is that the job finds them without ever referencing them.
              Runtime scope, not test: the same classpath also runs the job from the IDE (.run/FraudJob.run.xml). -->
         <dependency>
             <groupId>io.github.jlmc</groupId>
@@ -46,6 +46,43 @@
         <dependency>
             <groupId>io.github.jlmc</groupId>
             <artifactId>validation-rule-schema</artifactId>
+            <version>${project.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>io.github.jlmc</groupId>
+            <artifactId>fraud-rule-transaction-velocity</artifactId>
+            <version>${project.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.github.jlmc</groupId>
+            <artifactId>fraud-rule-spending-velocity</artifactId>
+            <version>${project.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.github.jlmc</groupId>
+            <artifactId>fraud-rule-geographic-impossibility</artifactId>
+            <version>${project.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.github.jlmc</groupId>
+            <artifactId>fraud-rule-unusual-amount</artifactId>
+            <version>${project.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.github.jlmc</groupId>
+            <artifactId>fraud-rule-new-country</artifactId>
+            <version>${project.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.github.jlmc</groupId>
+            <artifactId>fraud-rule-failed-attempts</artifactId>
             <version>${project.version}</version>
             <scope>runtime</scope>
         </dependency>

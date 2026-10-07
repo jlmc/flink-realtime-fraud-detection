@@ -9,10 +9,16 @@ import java.math.BigDecimal;
  * @param timestampMillis event time (epoch millis)
  * @param amount          never null (a missing amount is stored as zero)
  * @param country         may be null
+ * @param declined        true for a declined payment attempt (it spent nothing)
  */
-public record HistoryEntry(long timestampMillis, BigDecimal amount, String country) {
+public record HistoryEntry(long timestampMillis, BigDecimal amount, String country, boolean declined) {
 
     public HistoryEntry {
         amount = amount == null ? BigDecimal.ZERO : amount;
+    }
+
+    /** An approved attempt. */
+    public HistoryEntry(long timestampMillis, BigDecimal amount, String country) {
+        this(timestampMillis, amount, country, false);
     }
 }

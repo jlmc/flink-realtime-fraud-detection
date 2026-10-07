@@ -7,9 +7,11 @@ import io.github.jlmc.fraud.adapter.out.persistence.JdbcTransactionRepository;
 import io.github.jlmc.fraud.adapter.out.persistence.PoolConfig;
 import io.github.jlmc.fraud.adapter.out.persistence.PooledDataSources;
 import io.github.jlmc.fraud.adapter.out.persistence.RetryPolicy;
+import io.github.jlmc.fraud.adapter.out.plugin.ServiceLoaderRiskRuleProvider;
 import io.github.jlmc.fraud.adapter.out.plugin.ServiceLoaderValidationRuleProvider;
 import io.github.jlmc.fraud.application.model.RiskOutcome;
 import io.github.jlmc.fraud.application.port.out.TransactionRepositoryFactory;
+import io.github.jlmc.fraud.application.port.out.RiskRuleProviderFactory;
 import io.github.jlmc.fraud.application.port.out.ValidationRuleProviderFactory;
 import io.github.jlmc.fraud.validation.RiskResult;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
@@ -32,7 +34,7 @@ public final class FraudJob {
             // exactly-once and only commit on a checkpoint, so without this nothing would ever become visible.
             env.enableCheckpointing(Duration.ofSeconds(10).toMillis());
         }
-        build(env, config, defaultRules());
+        build(env, config, defaultRules(), defaultRiskRules());
         env.execute("transaction-fraud-risk");
     }
 
@@ -44,17 +46,23 @@ public final class FraudJob {
         return () -> new ServiceLoaderValidationRuleProvider(Thread.currentThread().getContextClassLoader(), true);
     }
 
+    /** Same lookup for the fraud (risk) rules, configured with the job's {@code risk.*} settings. Fails fast when none is found. */
+    public static RiskRuleProviderFactory defaultRiskRules() {
+        return settings -> new ServiceLoaderRiskRuleProvider(Thread.currentThread().getContextClassLoader(), settings, true);
+    }
+
     /**
      * Defines the whole dataflow on {@code env}. {@code main} and the integration tests share this method, so the tests run
      * the job exactly as it is deployed, only with another environment, configuration and rule source.
      */
-    public static void build(StreamExecutionEnvironment env, JobConfig config, ValidationRuleProviderFactory rules) {
+    public static void build(StreamExecutionEnvironment env, JobConfig config, ValidationRuleProviderFactory rules,
+                             RiskRuleProviderFactory riskRules) {
         var source = env.fromSource(
                 KafkaTransactionSource.create(config.kafkaBootstrapServers(), config.transactionsTopic(), config.consumerGroup()),
                 WatermarkStrategy.noWatermarks(), "kafka-transactions")
                 .uid("kafka-transactions");
 
-        PipelineAssembler.Streams streams = PipelineAssembler.assemble(source, config, rules);
+        PipelineAssembler.Streams streams = PipelineAssembler.assemble(source, config, rules, riskRules);
 
         streams.outcomes()
                 .map(RiskOutcome::result)

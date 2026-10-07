@@ -9,6 +9,7 @@ import io.github.jlmc.fraud.application.model.IncomingMessage;
 import io.github.jlmc.fraud.application.model.InvalidEvent;
 import io.github.jlmc.fraud.application.model.PersistableEvent;
 import io.github.jlmc.fraud.application.model.RiskOutcome;
+import io.github.jlmc.fraud.application.port.out.RiskRuleProviderFactory;
 import io.github.jlmc.fraud.application.port.out.ValidationRuleProviderFactory;
 import io.github.jlmc.fraud.application.usecase.PersistableEvents;
 import io.github.jlmc.fraud.validation.Transaction;
@@ -46,7 +47,8 @@ public final class PipelineAssembler {
     private PipelineAssembler() {
     }
 
-    public static Streams assemble(DataStream<IncomingMessage> messages, JobConfig config, ValidationRuleProviderFactory rules) {
+    public static Streams assemble(DataStream<IncomingMessage> messages, JobConfig config, ValidationRuleProviderFactory rules,
+                                    RiskRuleProviderFactory riskRules) {
         SingleOutputStreamOperator<Transaction> valid = messages
                 .process(new ValidationProcessFunction(rules))
                 .name("validate")
@@ -68,7 +70,7 @@ public final class PipelineAssembler {
                 .name("event-time")
                 .uid("event-time")
                 .keyBy(new CustomerIdKey())
-                .process(new RiskEvaluationFunction(config.thresholds(), config.allowedLateness()))
+                .process(new RiskEvaluationFunction(riskRules, config.riskSettings(), config.thresholds(), config.allowedLateness()))
                 .name("risk-evaluation")
                 .uid("risk-evaluation");
 

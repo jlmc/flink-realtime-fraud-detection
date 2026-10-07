@@ -14,6 +14,7 @@
     <modules>
         <module>validation-api</module>
         <module>validation-rules</module>
+        <module>fraud-rules</module>
         <module>flink-job</module>
         <module>integration-tests</module>
     </modules>

@@ -3,7 +3,6 @@ package io.github.jlmc.fraud.bootstrap;
 import io.github.jlmc.fraud.domain.risk.RiskThresholds;
 
 import java.io.Serializable;
-import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Locale;
@@ -29,6 +28,7 @@ public record JobConfig(
         Duration allowedLateness,
         Duration dedupRetention,
         RiskThresholds thresholds,
+        Map<String, String> riskSettings,
         PostgresConfig postgres) implements Serializable {
 
     /**
@@ -65,13 +65,8 @@ public record JobConfig(
                 Duration.ofSeconds(l.getInt("watermark.idleness-seconds", 30)),
                 Duration.ofSeconds(l.getInt("watermark.allowed-lateness-seconds", 0)),
                 Duration.ofHours(l.getInt("dedup.retention-hours", 24)),
-                new RiskThresholds(
-                        l.getInt("risk.max-transactions-per-minute", d.maxTransactionsPerMinute()),
-                        new BigDecimal(l.get("risk.max-amount-per-ten-minutes", d.maxAmountPerTenMinutes().toPlainString())),
-                        new BigDecimal(l.get("risk.anomaly-multiplier", d.anomalyMultiplier().toPlainString())),
-                        l.getInt("risk.anomaly-min-history", d.anomalyMinHistory()),
-                        d.historyRetention(),
-                        d.maxHistoryEntries()),
+                d,
+                riskSettings(args, env),
                 new PostgresConfig(
                         l.get("postgres.url", "jdbc:postgresql://postgres:5432/fraud"),
                         l.get("postgres.user", "fraud"),
@@ -81,6 +76,25 @@ public record JobConfig(
                         l.getInt("postgres.batch-size", 500),
                         l.getInt("postgres.flush-interval-ms", 200),
                         l.getInt("postgres.max-retry-seconds", 60)));
+    }
+
+    /**
+     * Every {@code risk.*} setting, handed to the risk rule plugins. A program argument ({@code --risk.x-y 3}) wins over
+     * an environment variable ({@code RISK_X_Y=3}). Kept as a {@link HashMap}: the config is serialised with the job.
+     */
+    static Map<String, String> riskSettings(Map<String, String> args, Map<String, String> env) {
+        HashMap<String, String> settings = new HashMap<>();
+        env.forEach((name, value) -> {
+            if (name.startsWith("RISK_")) {
+                settings.put("risk." + name.substring("RISK_".length()).toLowerCase(Locale.ROOT).replace('_', '-'), value);
+            }
+        });
+        args.forEach((key, value) -> {
+            if (key.startsWith("risk.")) {
+                settings.put(key, value);
+            }
+        });
+        return settings;
     }
 
     /** Parses {@code --key value} pairs. A key without a value is an error: silently ignoring it hides typos. */

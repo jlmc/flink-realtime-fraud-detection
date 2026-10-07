@@ -75,4 +75,28 @@ class TransactionJsonParserTest {
 
         assertThat(m.isParsed()).isFalse();
     }
+
+    @Test
+    void aMissingPaymentStatusMeansApproved() {
+        var t = parse("{\"transactionId\":\"t\",\"amount\":1}").transaction();
+
+        assertThat(t.paymentStatus()).isNull();
+        assertThat(t.isDeclined()).isFalse();
+    }
+
+    @Test
+    void readsADeclinedPaymentStatus() {
+        var t = parse("{\"transactionId\":\"t\",\"paymentStatus\":\"DECLINED\"}").transaction();
+
+        assertThat(t.paymentStatus()).isEqualTo(io.github.jlmc.fraud.validation.PaymentStatus.DECLINED);
+        assertThat(t.isDeclined()).isTrue();
+    }
+
+    @Test
+    void anUnknownPaymentStatusIsAMalformedPayload() {
+        IncomingMessage m = parse("{\"transactionId\":\"t\",\"paymentStatus\":\"MAYBE\"}");
+
+        assertThat(m.isParsed()).isFalse();
+        assertThat(m.error()).startsWith(TransactionJsonParser.ERROR_PREFIX);
+    }
 }

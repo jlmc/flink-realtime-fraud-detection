@@ -117,4 +117,66 @@ class CustomerHistoryTest {
                 .extracting(e -> e.amount().intValue()).containsExactly(2);
         assertThat(h.evictOlderThan(T0.plusSeconds(2000).toEpochMilli(), Duration.ofMinutes(5)).isEmpty()).isTrue();
     }
+
+    // ---- declined attempts, previous transaction, known countries
+
+    private static HistoryEntry declined(long secondsAfterT0, String amount, String country) {
+        return new HistoryEntry(T0.plusSeconds(secondsAfterT0).toEpochMilli(), new BigDecimal(amount), country, true);
+    }
+
+    @Test
+    void declinedAttemptsCountInTheVelocityButSpendNothing() {
+        CustomerHistory h = new CustomerHistory(java.util.List.of(
+                entry(0, "100", "PT"),
+                declined(10, "900", "PT"),
+                declined(20, "900", "PT")));
+
+        RiskContext ctx = h.contextFor(tx(30, "50", "PT"));
+
+        assertThat(ctx.transactionsLastMinute()).isEqualTo(4);                 // 3 past attempts + the current one
+        assertThat(ctx.amountLastTenMinutes()).isEqualByComparingTo("150");     // declined 900s are not spending
+        assertThat(ctx.averageRecentAmount()).isEqualByComparingTo("100");      // mean of the approved ones only
+        assertThat(ctx.recentTransactionCount()).isEqualTo(1);
+    }
+
+    @Test
+    void aDeclinedCurrentTransactionAddsNoSpending() {
+        Transaction current = new Transaction("t", "c", "m", new BigDecimal("700"), "EUR", "PT", T0, io.github.jlmc.fraud.validation.PaymentStatus.DECLINED);
+
+        assertThat(CustomerHistory.empty().contextFor(current).amountLastTenMinutes()).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void countsOnlyTheDeclinedAttemptsOfTheLastFiveMinutes() {
+        CustomerHistory h = new CustomerHistory(java.util.List.of(
+                declined(0, "1", "PT"),      // exactly 5 minutes before -> outside
+                declined(1, "1", "PT"),      // inside
+                declined(200, "1", "PT"),    // inside
+                entry(250, "1", "PT")));     // approved, not counted
+
+        assertThat(h.contextFor(tx(300, "1", "PT")).declinedLastFiveMinutes()).isEqualTo(2);
+    }
+
+    @Test
+    void reportsTheTimeSincePreviousAndEveryKnownCountry() {
+        CustomerHistory h = new CustomerHistory(java.util.List.of(
+                entry(-3000, "1", "ES"),     // outside the 10 minute window, still a known country
+                entry(0, "1", "PT"),
+                entry(100, "1", "US")));
+
+        RiskContext ctx = h.contextFor(tx(160, "1", "PT"));
+
+        assertThat(ctx.timeSincePreviousTransaction()).isEqualTo(Duration.ofSeconds(60));
+        assertThat(ctx.previousCountry()).isEqualTo("US");
+        assertThat(ctx.knownCountries()).containsExactlyInAnyOrder("ES", "PT", "US");
+    }
+
+    @Test
+    void withoutHistoryThereIsNoPreviousTimeAndNoKnownCountry() {
+        RiskContext ctx = CustomerHistory.empty().contextFor(tx(0, "1", "PT"));
+
+        assertThat(ctx.timeSincePreviousTransaction()).isNull();
+        assertThat(ctx.knownCountries()).isEmpty();
+        assertThat(ctx.declinedLastFiveMinutes()).isZero();
+    }
 }

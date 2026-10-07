@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.github.jlmc</groupId>
+        <artifactId>transaction-fraud-poc</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>fraud-rules</artifactId>
+    <packaging>pom</packaging>
+    <name>fraud-rules</name>
+    <description>
+        Aggregator and shared parent of the fraud (risk) rule plugins. Each child is an independent JAR that implements
+        io.github.jlmc.fraud.validation.TransactionRiskRule and registers itself through META-INF/services.
+        flink-job never depends on these modules: the JARs are deployed next to the job (see scripts/stage-dist.sh).
+        To add a rule: create a sibling module here and list it below. No other module changes.
+    </description>
+
+    <modules>
+        <module>fraud-rule-transaction-velocity</module>
+        <module>fraud-rule-spending-velocity</module>
+        <module>fraud-rule-geographic-impossibility</module>
+        <module>fraud-rule-unusual-amount</module>
+        <module>fraud-rule-new-country</module>
+        <module>fraud-rule-failed-attempts</module>
+    </modules>
+
+    <!-- Every plugin depends on the contract, and on nothing else. -->
+    <dependencies>
+        <dependency>
+            <groupId>io.github.jlmc</groupId>
+            <artifactId>validation-api</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>only-validation-api</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <bannedDependencies>
+                                    <excludes>
+                                        <exclude>org.apache.flink:*</exclude>
+                                        <exclude>org.apache.kafka:*</exclude>
+                                        <exclude>io.github.jlmc:flink-job</exclude>
+                                    </excludes>
+                                    <message>fraud rules may only depend on validation-api</message>
+                                </bannedDependencies>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

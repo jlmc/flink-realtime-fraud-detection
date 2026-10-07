@@ -105,8 +105,9 @@
                                 <bannedDependencies>
                                     <excludes>
                                         <exclude>io.github.jlmc:validation-rule-*</exclude>
+                                        <exclude>io.github.jlmc:fraud-rule-*</exclude>
                                     </excludes>
-                                    <message>flink-job must not depend on concrete validation rules (plugins are deployed next to the job)</message>
+                                    <message>flink-job must not depend on concrete validation or fraud rules (plugins are deployed next to the job)</message>
                                 </bannedDependencies>
                             </rules>
                         </configuration>

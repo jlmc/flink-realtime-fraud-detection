@@ -7,7 +7,9 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Immutable, bounded view of a customer's recent transactions, oldest first.
@@ -22,6 +24,7 @@ import java.util.List;
 public record CustomerHistory(List<HistoryEntry> entries) {
 
     public static final Duration ONE_MINUTE = Duration.ofMinutes(1);
+    public static final Duration FIVE_MINUTES = Duration.ofMinutes(5);
     public static final Duration TEN_MINUTES = Duration.ofMinutes(10);
 
     public CustomerHistory {
@@ -75,12 +78,15 @@ public record CustomerHistory(List<HistoryEntry> entries) {
      */
     public RiskContext contextFor(Transaction transaction) {
         long t = transaction.timestamp().toEpochMilli();
-        BigDecimal current = transaction.amount() == null ? BigDecimal.ZERO : transaction.amount();
+        BigDecimal current = transaction.amount() == null || transaction.isDeclined() ? BigDecimal.ZERO : transaction.amount();
 
         int lastMinute = 1;
         BigDecimal lastTenMinutes = current;
         List<String> recentCountries = new ArrayList<>();
-        BigDecimal sum = BigDecimal.ZERO;
+        Set<String> knownCountries = new HashSet<>();
+        int declinedLastFiveMinutes = 0;
+        BigDecimal approvedSum = BigDecimal.ZERO;
+        int approvedCount = 0;
 
         List<HistoryEntry> past = entries.stream().filter(e -> e.timestampMillis() <= t).toList();
 
@@ -89,20 +95,33 @@ public record CustomerHistory(List<HistoryEntry> entries) {
             if (age < ONE_MINUTE.toMillis()) {
                 lastMinute++;
             }
+            if (age < FIVE_MINUTES.toMillis() && e.declined()) {
+                declinedLastFiveMinutes++;
+            }
             if (age < TEN_MINUTES.toMillis()) {
-                lastTenMinutes = lastTenMinutes.add(e.amount());
+                if (!e.declined()) {
+                    lastTenMinutes = lastTenMinutes.add(e.amount());
+                }
                 if (e.country() != null) {
                     recentCountries.add(e.country());
                 }
             }
-            sum = sum.add(e.amount());
+            if (e.country() != null) {
+                knownCountries.add(e.country());
+            }
+            if (!e.declined()) {
+                approvedSum = approvedSum.add(e.amount());
+                approvedCount++;
+            }
         }
 
-        String previousCountry = past.isEmpty() ? null : past.get(past.size() - 1).country();
-        BigDecimal average = past.isEmpty()
+        HistoryEntry previous = past.isEmpty() ? null : past.get(past.size() - 1);
+        BigDecimal average = approvedCount == 0
                 ? null
-                : sum.divide(BigDecimal.valueOf(past.size()), 4, RoundingMode.HALF_UP);
+                : approvedSum.divide(BigDecimal.valueOf(approvedCount), 4, RoundingMode.HALF_UP);
+        Duration sincePrevious = previous == null ? null : Duration.ofMillis(t - previous.timestampMillis());
 
-        return new RiskContext(lastMinute, lastTenMinutes, previousCountry, recentCountries, average, past.size());
+        return new RiskContext(lastMinute, lastTenMinutes, previous == null ? null : previous.country(), recentCountries,
+                average, approvedCount, sincePrevious, knownCountries, declinedLastFiveMinutes);
     }
 }

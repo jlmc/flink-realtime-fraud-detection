@@ -18,7 +18,21 @@ class JobConfigTest {
         assertThat(c.transactionsTopic()).isEqualTo("transaction.events");
         assertThat(c.watermarkOutOfOrderness()).isEqualTo(Duration.ofSeconds(30));
         assertThat(c.allowedLateness()).isZero();
-        assertThat(c.thresholds().maxTransactionsPerMinute()).isEqualTo(5);
+        assertThat(c.riskSettings()).isEmpty();
+        assertThat(c.thresholds().historyRetention()).isEqualTo(Duration.ofHours(1));
+        assertThat(c.thresholds().maxHistoryEntries()).isEqualTo(100);
+    }
+
+    @Test
+    void everyRiskKeyIsPassedOnToTheRulePlugins() {
+        JobConfig c = JobConfig.from(
+                Map.of("risk.impossible-travel-minutes", "30", "risk.max-transactions-per-minute", "9", "topic.risk", "not-a-risk-setting"),
+                Map.of("RISK_NEW_COUNTRY_MIN_HISTORY", "5", "RISK_MAX_TRANSACTIONS_PER_MINUTE", "7", "KAFKA_BOOTSTRAP_SERVERS", "x:1"));
+
+        assertThat(c.riskSettings()).containsOnly(
+                Map.entry("risk.impossible-travel-minutes", "30"),
+                Map.entry("risk.max-transactions-per-minute", "9"),          // argument beats environment
+                Map.entry("risk.new-country-min-history", "5"));
     }
 
     @Test
@@ -29,7 +43,7 @@ class JobConfigTest {
 
         assertThat(c.kafkaBootstrapServers()).isEqualTo("from-args:1");
         assertThat(c.riskTopic()).isEqualTo("risk-from-env");
-        assertThat(c.thresholds().maxTransactionsPerMinute()).isEqualTo(9);
+        assertThat(c.riskSettings()).containsEntry("risk.max-transactions-per-minute", "9");
     }
 
     @Test

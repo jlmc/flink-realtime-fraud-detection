@@ -3,11 +3,11 @@ package io.github.jlmc.fraud.adapter.in.flink;
 import io.github.jlmc.fraud.application.model.HighRiskFraudAlert;
 import io.github.jlmc.fraud.application.model.RiskOutcome;
 import io.github.jlmc.fraud.application.port.in.EvaluateRiskUseCase;
+import io.github.jlmc.fraud.application.port.out.RiskRuleProviderFactory;
 import io.github.jlmc.fraud.application.usecase.EvaluateRiskService;
 import io.github.jlmc.fraud.domain.history.CustomerHistory;
 import io.github.jlmc.fraud.domain.history.HistoryEntry;
 import io.github.jlmc.fraud.domain.risk.FraudAlertPolicy;
-import io.github.jlmc.fraud.domain.risk.RiskRules;
 import io.github.jlmc.fraud.domain.risk.RiskThresholds;
 import io.github.jlmc.fraud.validation.Transaction;
 import org.apache.flink.api.common.functions.OpenContext;
@@ -22,10 +22,14 @@ import org.apache.flink.metrics.Counter;
 import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
 import org.apache.flink.util.Collector;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Event-time risk evaluation, keyed by customerId. This class only translates Flink concepts (keyed state, event-time
@@ -48,6 +52,10 @@ import java.util.List;
  */
 public class RiskEvaluationFunction extends KeyedProcessFunction<String, Transaction, RiskOutcome> {
 
+    private static final Logger LOG = LoggerFactory.getLogger(RiskEvaluationFunction.class);
+
+    private final RiskRuleProviderFactory ruleFactory;
+    private final Map<String, String> ruleSettings;
     private final RiskThresholds thresholds;
     private final Duration allowedLateness;
 
@@ -59,14 +67,19 @@ public class RiskEvaluationFunction extends KeyedProcessFunction<String, Transac
     private transient Counter late;
     private transient Counter tolerated;
 
-    public RiskEvaluationFunction(RiskThresholds thresholds, Duration allowedLateness) {
+    public RiskEvaluationFunction(RiskRuleProviderFactory ruleFactory, Map<String, String> ruleSettings,
+                                  RiskThresholds thresholds, Duration allowedLateness) {
+        this.ruleFactory = ruleFactory;
+        this.ruleSettings = ruleSettings;
         this.thresholds = thresholds;
         this.allowedLateness = allowedLateness;
     }
 
     @Override
     public void open(OpenContext openContext) {
-        this.useCase = new EvaluateRiskService(RiskRules.from(thresholds));
+        var provider = ruleFactory.create(ruleSettings);
+        LOG.info("Risk rules loaded: {}", provider.rules().stream().map(r -> r.name()).toList());
+        this.useCase = new EvaluateRiskService(provider.rules());
         this.historyState = getRuntimeContext().getListState(
                 new ListStateDescriptor<>("customer-history", TypeInformation.of(HistoryEntry.class)));
         this.pending = getRuntimeContext().getMapState(
@@ -133,7 +146,8 @@ public class RiskEvaluationFunction extends KeyedProcessFunction<String, Transac
         evaluated.inc();
 
         CustomerHistory updated = history.append(
-                new HistoryEntry(transaction.timestamp().toEpochMilli(), transaction.amount(), transaction.country()),
+                new HistoryEntry(transaction.timestamp().toEpochMilli(), transaction.amount(), transaction.country(),
+                        transaction.isDeclined()),
                 thresholds.historyRetention(), thresholds.maxHistoryEntries());
         historyState.update(updated.entries());
         // eviction: fires once the watermark passes the retention horizon of this entry

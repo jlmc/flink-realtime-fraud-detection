@@ -1,81 +1,75 @@
 package io.github.jlmc.fraud.application.usecase;
 
 import io.github.jlmc.fraud.domain.history.CustomerHistory;
-import io.github.jlmc.fraud.domain.history.HistoryEntry;
-import io.github.jlmc.fraud.domain.risk.RiskRules;
-import io.github.jlmc.fraud.domain.risk.RiskThresholds;
+import io.github.jlmc.fraud.validation.RiskContribution;
 import io.github.jlmc.fraud.validation.RiskLevel;
 import io.github.jlmc.fraud.validation.RiskResult;
 import io.github.jlmc.fraud.validation.Transaction;
+import io.github.jlmc.fraud.validation.TransactionRiskRule;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** History + rules + aggregation together, still without any Flink type. */
+/** The aggregation only (sum, cap, level, order of reasons), with throwaway rules. The real rules are plugins with their own tests. */
 class EvaluateRiskServiceTest {
 
-    private static final Instant T0 = Instant.parse("2026-10-06T13:00:00Z");
-    private final EvaluateRiskService service = new EvaluateRiskService(RiskRules.from(RiskThresholds.defaults()));
+    private static final Transaction TX = new Transaction("t-1", "customer-42", "m", new BigDecimal("10"), "EUR", "PT",
+            Instant.parse("2026-10-06T13:00:00Z"));
 
-    private static Transaction tx(long sec, String amount, String country) {
-        return new Transaction("t-" + sec, "customer-42", "m", new BigDecimal(amount), "EUR", country, T0.plusSeconds(sec));
+    private static TransactionRiskRule rule(String reason, int score, boolean triggers) {
+        return new TransactionRiskRule() {
+            @Override
+            public String name() {
+                return reason;
+            }
+
+            @Override
+            public RiskContribution evaluate(Transaction transaction, io.github.jlmc.fraud.validation.RiskContext context) {
+                return triggers ? RiskContribution.triggered(score, reason) : RiskContribution.none();
+            }
+        };
     }
 
-    private RiskResult evaluate(CustomerHistory history, Transaction tx) {
-        return service.evaluate(tx, history.contextFor(tx));
-    }
-
-    private static CustomerHistory feed(Transaction... txs) {
-        CustomerHistory h = CustomerHistory.empty();
-        for (Transaction t : txs) {
-            h = h.append(new HistoryEntry(t.timestamp().toEpochMilli(), t.amount(), t.country()),
-                    RiskThresholds.defaults().historyRetention(), RiskThresholds.defaults().maxHistoryEntries());
-        }
-        return h;
+    private static RiskResult evaluate(TransactionRiskRule... rules) {
+        return new EvaluateRiskService(List.of(rules)).evaluate(TX, CustomerHistory.empty().contextFor(TX));
     }
 
     @Test
-    void normalTransactionIsLowRiskWithNoReasons() {
-        RiskResult r = evaluate(CustomerHistory.empty(), tx(0, "25", "PT"));
+    void noTriggeredRuleIsLowRiskWithNoReasons() {
+        RiskResult r = evaluate(rule("A", 40, false));
 
         assertThat(r.riskScore()).isZero();
         assertThat(r.riskLevel()).isEqualTo(RiskLevel.LOW);
         assertThat(r.reasons()).isEmpty();
-        assertThat(r.transactionId()).isEqualTo("t-0");
-        assertThat(r.timestamp()).isEqualTo(T0);
+        assertThat(r.transactionId()).isEqualTo("t-1");
+        assertThat(r.timestamp()).isEqualTo(TX.timestamp());
     }
 
     @Test
-    void sixthTransactionInAMinuteTriggersVelocity() {
-        CustomerHistory h = feed(tx(0, "1", "PT"), tx(5, "1", "PT"), tx(10, "1", "PT"), tx(15, "1", "PT"), tx(20, "1", "PT"));
+    void contributionsAddUpAndReasonsFollowTheOrderOfTheRules() {
+        RiskResult r = evaluate(rule("FIRST", 40, true), rule("SKIPPED", 99, false), rule("SECOND", 30, true));
 
-        RiskResult r = evaluate(h, tx(25, "1", "PT"));
-
-        assertThat(r.reasons()).containsExactly("HIGH_TRANSACTION_VELOCITY");
-        assertThat(r.riskLevel()).isEqualTo(RiskLevel.MEDIUM);
-    }
-
-    @Test
-    void severalRulesAddUpAndTheScoreIsCappedAt100() {
-        // velocity (40) + spending (40) + country change (50) = 130 -> 100
-        CustomerHistory h = feed(tx(0, "1000", "PT"), tx(5, "1000", "US"), tx(10, "1000", "PT"), tx(15, "1000", "PT"), tx(20, "1000", "PT"));
-
-        RiskResult r = evaluate(h, tx(25, "1000", "PT"));
-
-        assertThat(r.reasons()).contains("HIGH_TRANSACTION_VELOCITY", "HIGH_SPENDING_VELOCITY");
-        assertThat(r.riskScore()).isLessThanOrEqualTo(100);
+        assertThat(r.riskScore()).isEqualTo(70);
         assertThat(r.riskLevel()).isEqualTo(RiskLevel.HIGH);
+        assertThat(r.reasons()).containsExactly("FIRST", "SECOND");
     }
 
     @Test
-    void unusualAmountIsFlaggedAfterEnoughHistory() {
-        CustomerHistory h = feed(tx(0, "20", "PT"), tx(600, "30", "PT"), tx(1200, "25", "PT"));
+    void theScoreIsCappedAt100() {
+        RiskResult r = evaluate(rule("A", 60, true), rule("B", 60, true));
 
-        RiskResult r = evaluate(h, tx(1800, "900", "PT"));
+        assertThat(r.riskScore()).isEqualTo(100);
+    }
 
-        assertThat(r.reasons()).containsExactly("UNUSUAL_AMOUNT");
+    @Test
+    void theLevelFollowsTheScoreBoundaries() {
+        assertThat(evaluate(rule("A", 39, true)).riskLevel()).isEqualTo(RiskLevel.LOW);
+        assertThat(evaluate(rule("A", 40, true)).riskLevel()).isEqualTo(RiskLevel.MEDIUM);
+        assertThat(evaluate(rule("A", 69, true)).riskLevel()).isEqualTo(RiskLevel.MEDIUM);
+        assertThat(evaluate(rule("A", 70, true)).riskLevel()).isEqualTo(RiskLevel.HIGH);
     }
 }

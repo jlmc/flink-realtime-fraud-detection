@@ -69,6 +69,15 @@ class ArchitectureTest {
     }
 
     @Test
+    void noClassReferencesAConcreteRiskRule() {
+        noClasses()
+                .that().resideInAPackage(BASE + "..")
+                .should().dependOnClassesThat().resideInAPackage(BASE + ".risk.rules..")
+                .because("fraud rules are plugins discovered at runtime, never referenced by the job")
+                .check(classes);
+    }
+
+    @Test
     void inboundAndOutboundAdaptersDoNotDependOnEachOther() {
         slices().matching(BASE + ".adapter.(*)..")
                 .should().notDependOnEachOther()

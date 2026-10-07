@@ -1,6 +1,7 @@
 package io.github.jlmc.fraud.adapter.in.flink;
 
 import io.github.jlmc.fraud.application.model.RiskOutcome;
+import io.github.jlmc.fraud.bootstrap.FraudJob;
 import io.github.jlmc.fraud.domain.risk.RiskThresholds;
 import io.github.jlmc.fraud.validation.Transaction;
 import org.apache.flink.api.common.typeinfo.Types;
@@ -27,7 +28,7 @@ class RiskEvaluationFunctionTest {
 
     private static KeyedOneInputStreamOperatorTestHarness<String, Transaction, RiskOutcome> newHarness(Duration allowedLateness) throws Exception {
         return new KeyedOneInputStreamOperatorTestHarness<>(
-                new KeyedProcessOperator<>(new RiskEvaluationFunction(RiskThresholds.defaults(), allowedLateness)),
+                new KeyedProcessOperator<>(new RiskEvaluationFunction(FraudJob.defaultRiskRules(), java.util.Map.of(), RiskThresholds.defaults(), allowedLateness)),
                 Transaction::customerId, Types.STRING);
     }
 
@@ -89,7 +90,7 @@ class RiskEvaluationFunctionTest {
 
     @Test
     void outOfOrderDoesNotChangeTheRiskResult() throws Exception {
-        // A -> B -> A country pattern must be found even if the middle event arrives last
+        // PT -> US inside the travel window must be found even if the middle event arrives last
         start(Duration.ZERO);
         send(tx("first", "c1", 0, "5", "PT"));
         send(tx("third", "c1", 120, "5", "PT"));
@@ -97,7 +98,7 @@ class RiskEvaluationFunctionTest {
 
         harness.processWatermark(millis(200));
 
-        assertThat(harness.extractOutputValues().get(2).result().reasons()).contains("SUSPICIOUS_COUNTRY_CHANGE");
+        assertThat(harness.extractOutputValues().get(2).result().reasons()).contains("STUB_TRAVEL");
     }
 
     @Test
@@ -149,7 +150,7 @@ class RiskEvaluationFunctionTest {
         harness.processWatermark(millis(60));
 
         var byId = harness.extractOutputValues().stream().collect(java.util.stream.Collectors.toMap(o -> o.transaction().transactionId(), o -> o));
-        assertThat(byId.get("x5").result().reasons()).contains("HIGH_TRANSACTION_VELOCITY");
+        assertThat(byId.get("x5").result().reasons()).contains("STUB_VELOCITY");
         assertThat(byId.get("y").result().reasons()).isEmpty();
     }
 
@@ -174,7 +175,7 @@ class RiskEvaluationFunctionTest {
 
         assertThat(harness.extractOutputValues()).singleElement().satisfies(o -> {
             assertThat(o.transaction().transactionId()).isEqualTo("after");
-            assertThat(o.result().reasons()).contains("HIGH_TRANSACTION_VELOCITY"); // 6th within a minute: needs restored state
+            assertThat(o.result().reasons()).contains("STUB_VELOCITY"); // 6th within a minute: needs restored state
         });
     }
 
