@@ -72,6 +72,15 @@ public final class PostgresFixture {
         return new Database(name, url, CONTAINER.getUsername(), CONTAINER.getPassword());
     }
 
+    /** Freezes the whole server (like a network partition or a stalled disk): connections hang, nothing is refused. */
+    public static void pause() {
+        CONTAINER.getDockerClient().pauseContainerCmd(CONTAINER.getContainerId()).exec();
+    }
+
+    public static void unpause() {
+        CONTAINER.getDockerClient().unpauseContainerCmd(CONTAINER.getContainerId()).exec();
+    }
+
     /** Opens a connection to the maintenance database, for server-wide operations such as terminating backends. */
     public static Connection admin() throws SQLException {
         return DriverManager.getConnection(CONTAINER.getJdbcUrl(), CONTAINER.getUsername(), CONTAINER.getPassword());
