@@ -24,8 +24,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 class PipelineAssemblerTest {
 
     private static String json(String id, String customer, String time, String amount, String country) {
-        return "{\"transactionId\":\"%s\",\"customerId\":\"%s\",\"merchantId\":\"m\",\"amount\":%s,\"currency\":\"EUR\",\"country\":\"%s\",\"timestamp\":\"2026-10-06T%sZ\"}"
-                .formatted(id, customer, amount, country, time);
+        return """
+                {
+                  "transactionId": "%s",
+                  "customerId": "%s",
+                  "merchantId": "m",
+                  "amount": %s,
+                  "currency": "EUR",
+                  "country": "%s",
+                  "timestamp": "2026-10-06T%sZ"
+                }
+                """.formatted(id, customer, amount, country, time);
     }
 
     private static IncomingMessage message(String payload, long offset) {

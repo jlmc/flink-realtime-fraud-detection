@@ -37,7 +37,14 @@ class ValidationProcessFunctionTest {
         return TransactionJsonParser.parse(json.getBytes(StandardCharsets.UTF_8), "transaction.events", 0, 1);
     }
 
-    private static final String VALID = "{\"transactionId\":\"t1\",\"customerId\":\"c\",\"amount\":10,\"timestamp\":\"2026-10-06T13:00:00Z\"}";
+    private static final String VALID = """
+            {
+              "transactionId": "t1",
+              "customerId": "c",
+              "amount": 10,
+              "timestamp": "2026-10-06T13:00:00Z"
+            }
+            """;
 
     @Test
     void validTransactionGoesDownstream() throws Exception {
@@ -49,8 +56,14 @@ class ValidationProcessFunctionTest {
 
     @Test
     void pluginRejectionGoesToTheInvalidSideOutput() throws Exception {
-        harness.processElement(new StreamRecord<>(message(
-                "{\"transactionId\":\"t2\",\"customerId\":\"c\",\"amount\":-5,\"timestamp\":\"2026-10-06T13:00:00Z\"}")));
+        harness.processElement(new StreamRecord<>(message("""
+                {
+                  "transactionId": "t2",
+                  "customerId": "c",
+                  "amount": -5,
+                  "timestamp": "2026-10-06T13:00:00Z"
+                }
+                """)));
 
         assertThat(harness.extractOutputValues()).isEmpty();
         InvalidEvent event = harness.getSideOutput(PipelineTags.INVALID).poll().getValue();
