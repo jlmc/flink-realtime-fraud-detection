@@ -27,11 +27,23 @@ public final class FraudJob {
         JobConfig config = JobConfig.from(JobConfig.parseArgs(args), System.getenv());
 
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        build(env, config, defaultRules());
+        env.execute("transaction-fraud-risk");
+    }
 
-        // Plugins are looked up on the TaskManager with the context classloader (docs/spikes/S1-plugin-classloading.md).
-        ValidationRuleProviderFactory rules =
-                () -> new ServiceLoaderValidationRuleProvider(Thread.currentThread().getContextClassLoader(), true);
+    /**
+     * Plugins are looked up on the TaskManager with the context classloader (docs/spikes/S1-plugin-classloading.md).
+     * Fails fast when none is found.
+     */
+    public static ValidationRuleProviderFactory defaultRules() {
+        return () -> new ServiceLoaderValidationRuleProvider(Thread.currentThread().getContextClassLoader(), true);
+    }
 
+    /**
+     * Defines the whole dataflow on {@code env}. {@code main} and the integration tests share this method, so the tests run
+     * the job exactly as it is deployed, only with another environment, configuration and rule source.
+     */
+    public static void build(StreamExecutionEnvironment env, JobConfig config, ValidationRuleProviderFactory rules) {
         var source = env.fromSource(
                 KafkaTransactionSource.create(config.kafkaBootstrapServers(), config.transactionsTopic(), config.consumerGroup()),
                 WatermarkStrategy.noWatermarks(), "kafka-transactions")
@@ -58,7 +70,5 @@ public final class FraudJob {
         streams.persistable()
                 .sinkTo(new BatchingRepositorySink(repositories, pg.batchSize(), pg.flushIntervalMillis(), retry))
                 .name("postgres").uid("postgres");
-
-        env.execute("transaction-fraud-risk");
     }
 }
