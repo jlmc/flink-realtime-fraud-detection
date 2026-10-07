@@ -69,8 +69,12 @@ class PipelineAssemblerTest {
                 .map(p -> "PERSIST " + p.transaction().transactionId() + " " + p.status() + " alert=" + p.raiseAlert())
                 .returns(Types.STRING);
 
+        DataStream<String> alerts = streams.alerts()
+                .map(a -> "ALERT " + a.alertId() + " " + a.riskScore() + " " + a.reasons())
+                .returns(Types.STRING);
+
         List<String> lines = new ArrayList<>();
-        try (CloseableIterator<String> it = risk.union(invalid, late, persist).executeAndCollect("pipeline-test")) {
+        try (CloseableIterator<String> it = risk.union(invalid, late, persist, alerts).executeAndCollect("pipeline-test")) {
             it.forEachRemaining(lines::add);
         }
         return lines;
@@ -127,5 +131,19 @@ class PipelineAssemblerTest {
 
         assertThat(out).contains("RISK t6 MEDIUM [HIGH_TRANSACTION_VELOCITY]");
         assertThat(out.stream().filter(l -> l.startsWith("RISK") && l.contains("HIGH_TRANSACTION_VELOCITY"))).hasSize(1);
+    }
+
+    @Test
+    void aHighRiskBurstRaisesOneAlertWithEveryReasonAndNormalTransactionsRaiseNone() throws Exception {
+        // 6 x 1000 EUR in 25 s: velocity (40) + spending (40) on the sixth = 80 = HIGH
+        var out = run(
+                json("b1", "c1", "13:00:00", "1000", "PT"), json("b2", "c1", "13:00:05", "1000", "PT"),
+                json("b3", "c1", "13:00:10", "1000", "PT"), json("b4", "c1", "13:00:15", "1000", "PT"),
+                json("b5", "c1", "13:00:20", "1000", "PT"), json("b6", "c1", "13:00:25", "1000", "PT"),
+                json("calm", "c2", "13:00:00", "5", "PT"));
+
+        assertThat(out.stream().filter(l -> l.startsWith("ALERT")))
+                .containsExactly("ALERT high-risk-v1-b6 80 [HIGH_TRANSACTION_VELOCITY, HIGH_SPENDING_VELOCITY]");
+        assertThat(out.stream().filter(l -> l.startsWith("RISK"))).as("risk results are unaffected").hasSize(7);
     }
 }

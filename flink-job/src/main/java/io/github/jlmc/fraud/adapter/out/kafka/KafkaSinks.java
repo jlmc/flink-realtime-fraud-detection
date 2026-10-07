@@ -1,5 +1,6 @@
 package io.github.jlmc.fraud.adapter.out.kafka;
 
+import io.github.jlmc.fraud.application.model.HighRiskFraudAlert;
 import io.github.jlmc.fraud.application.model.InvalidEvent;
 import io.github.jlmc.fraud.validation.RiskResult;
 import org.apache.flink.connector.base.DeliveryGuarantee;
@@ -33,6 +34,21 @@ public final class KafkaSinks {
                 .setBootstrapServers(bootstrapServers)
                 .setRecordSerializer(new JsonKafkaRecordSerializer<InvalidEvent>(topic, InvalidEvent::transactionId))
                 .setDeliveryGuarantee(DeliveryGuarantee.AT_LEAST_ONCE)
+                .build();
+    }
+
+    /**
+     * High-risk alerts: same strategy as the risk results (EXACTLY_ONCE, read_committed consumers). The prefix must be
+     * different from the other transactional sink's. Keyed by customer so alerts of one customer stay ordered.
+     */
+    public static KafkaSink<HighRiskFraudAlert> highRiskAlerts(String bootstrapServers, String topic,
+                                                               String transactionalIdPrefix, int transactionTimeoutMs) {
+        return KafkaSink.<HighRiskFraudAlert>builder()
+                .setBootstrapServers(bootstrapServers)
+                .setRecordSerializer(new JsonKafkaRecordSerializer<HighRiskFraudAlert>(topic, HighRiskFraudAlert::customerId))
+                .setDeliveryGuarantee(DeliveryGuarantee.EXACTLY_ONCE)
+                .setTransactionalIdPrefix(transactionalIdPrefix)
+                .setProperty("transaction.timeout.ms", String.valueOf(transactionTimeoutMs))
                 .build();
     }
 }

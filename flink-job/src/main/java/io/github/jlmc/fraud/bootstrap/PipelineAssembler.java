@@ -4,6 +4,7 @@ import io.github.jlmc.fraud.adapter.in.flink.DeduplicationFunction;
 import io.github.jlmc.fraud.adapter.in.flink.PipelineTags;
 import io.github.jlmc.fraud.adapter.in.flink.RiskEvaluationFunction;
 import io.github.jlmc.fraud.adapter.in.flink.ValidationProcessFunction;
+import io.github.jlmc.fraud.application.model.HighRiskFraudAlert;
 import io.github.jlmc.fraud.application.model.IncomingMessage;
 import io.github.jlmc.fraud.application.model.InvalidEvent;
 import io.github.jlmc.fraud.application.model.PersistableEvent;
@@ -27,16 +28,19 @@ import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
  *              keyBy(transactionId) -> dedup -> watermarks -> keyBy(customerId) -> risk --late--> (late transactions)
  *                                                                                    |
  *                                                                                  outcomes ---+--- (late) ---> persistable --> PostgreSQL
+ *                                                                                    |
+ *                                                                                  alerts (HIGH only) ---> fraud.high-risk.alerts
  * </pre>
  */
 public final class PipelineAssembler {
 
-    /** The three streams a caller attaches sinks to. */
+    /** The streams a caller attaches sinks to. */
     public record Streams(
             DataStream<RiskOutcome> outcomes,
             DataStream<InvalidEvent> invalid,
             DataStream<Transaction> late,
-            DataStream<PersistableEvent> persistable) {
+            DataStream<PersistableEvent> persistable,
+            DataStream<HighRiskFraudAlert> alerts) {
     }
 
     private PipelineAssembler() {
@@ -80,7 +84,9 @@ public final class PipelineAssembler {
                         .name("to-persistable-late")
                         .uid("to-persistable-late"));
 
-        return new Streams(outcomes, valid.getSideOutput(PipelineTags.INVALID), late, persistable);
+        DataStream<HighRiskFraudAlert> alerts = outcomes.getSideOutput(PipelineTags.ALERTS);
+
+        return new Streams(outcomes, valid.getSideOutput(PipelineTags.INVALID), late, persistable, alerts);
     }
 
     public static class ProcessedToPersistable implements MapFunction<RiskOutcome, PersistableEvent> {

@@ -1,5 +1,6 @@
 package io.github.jlmc.fraud.adapter.in.flink;
 
+import io.github.jlmc.fraud.application.model.HighRiskFraudAlert;
 import io.github.jlmc.fraud.application.model.InvalidEvent;
 import io.github.jlmc.fraud.validation.Transaction;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
@@ -12,6 +13,9 @@ public final class PipelineTags {
 
     /** Transactions that arrived behind the watermark (beyond the tolerated lateness). */
     public static final OutputTag<Transaction> LATE = new OutputTag<>("late", TypeInformation.of(Transaction.class));
+
+    /** Actionable high-risk alerts, emitted next to (not instead of) the risk result. */
+    public static final OutputTag<HighRiskFraudAlert> ALERTS = new OutputTag<>("high-risk-alerts", TypeInformation.of(HighRiskFraudAlert.class));
 
     private PipelineTags() {
     }

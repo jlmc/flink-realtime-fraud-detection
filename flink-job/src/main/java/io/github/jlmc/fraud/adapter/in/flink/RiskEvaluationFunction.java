@@ -1,10 +1,12 @@
 package io.github.jlmc.fraud.adapter.in.flink;
 
+import io.github.jlmc.fraud.application.model.HighRiskFraudAlert;
 import io.github.jlmc.fraud.application.model.RiskOutcome;
 import io.github.jlmc.fraud.application.port.in.EvaluateRiskUseCase;
 import io.github.jlmc.fraud.application.usecase.EvaluateRiskService;
 import io.github.jlmc.fraud.domain.history.CustomerHistory;
 import io.github.jlmc.fraud.domain.history.HistoryEntry;
+import io.github.jlmc.fraud.domain.risk.FraudAlertPolicy;
 import io.github.jlmc.fraud.domain.risk.RiskRules;
 import io.github.jlmc.fraud.domain.risk.RiskThresholds;
 import io.github.jlmc.fraud.validation.Transaction;
@@ -17,7 +19,6 @@ import org.apache.flink.api.common.typeinfo.TypeHint;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.metrics.Counter;
-import org.apache.flink.streaming.api.TimerService;
 import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
 import org.apache.flink.util.Collector;
 
@@ -41,6 +42,7 @@ import java.util.List;
  *   <li>A transaction older than {@code watermark - allowedLateness} is late: it is not evaluated, it goes to
  *       {@link PipelineTags#LATE}. Within the allowed lateness it is still evaluated, immediately, against the history
  *       that exists at that moment.</li>
+ *   <li>A result that {@link FraudAlertPolicy} considers high risk is also emitted, once, to {@link PipelineTags#ALERTS}.</li>
  *   <li>History older than the retention is evicted by an event-time timer, so idle customers do not keep state.</li>
  * </ol>
  */
@@ -53,6 +55,7 @@ public class RiskEvaluationFunction extends KeyedProcessFunction<String, Transac
     private transient ListState<HistoryEntry> historyState;
     private transient MapState<Long, List<Transaction>> pending;
     private transient Counter evaluated;
+    private transient Counter alerts;
     private transient Counter late;
     private transient Counter tolerated;
 
@@ -70,6 +73,7 @@ public class RiskEvaluationFunction extends KeyedProcessFunction<String, Transac
                 new MapStateDescriptor<>("pending-by-timestamp", Types.LONG, TypeInformation.of(new TypeHint<List<Transaction>>() { })));
         var metrics = getRuntimeContext().getMetricGroup();
         this.evaluated = metrics.counter("risk_evaluated");
+        this.alerts = metrics.counter("high_risk_alerts");
         this.late = metrics.counter("late_events");
         this.tolerated = metrics.counter("late_events_tolerated");
     }
@@ -86,7 +90,7 @@ public class RiskEvaluationFunction extends KeyedProcessFunction<String, Transac
                 return;
             }
             tolerated.inc();
-            evaluate(transaction, out, ctx.timerService());
+            evaluate(transaction, out, ctx);
             return;
         }
 
@@ -106,7 +110,7 @@ public class RiskEvaluationFunction extends KeyedProcessFunction<String, Transac
             pending.remove(timestamp);
             bucket.sort(Comparator.comparing(Transaction::transactionId)); // deterministic order for equal timestamps
             for (Transaction transaction : bucket) {
-                evaluate(transaction, out, ctx.timerService());
+                evaluate(transaction, out, ctx);
             }
         }
         CustomerHistory remaining = loadHistory().evictOlderThan(timestamp, thresholds.historyRetention());
@@ -117,9 +121,15 @@ public class RiskEvaluationFunction extends KeyedProcessFunction<String, Transac
         }
     }
 
-    private void evaluate(Transaction transaction, Collector<RiskOutcome> out, TimerService timers) throws Exception {
+    private void evaluate(Transaction transaction, Collector<RiskOutcome> out, Context ctx) throws Exception {
         CustomerHistory history = loadHistory();
-        out.collect(new RiskOutcome(transaction, useCase.evaluate(transaction, history.contextFor(transaction))));
+        RiskOutcome outcome = new RiskOutcome(transaction, useCase.evaluate(transaction, history.contextFor(transaction)));
+        out.collect(outcome);
+        if (FraudAlertPolicy.shouldAlert(outcome.result())) {
+            // same evaluation, second output: the alert is a projection of the result, not another engine
+            ctx.output(PipelineTags.ALERTS, HighRiskFraudAlert.from(outcome.result()));
+            alerts.inc();
+        }
         evaluated.inc();
 
         CustomerHistory updated = history.append(
@@ -127,7 +137,7 @@ public class RiskEvaluationFunction extends KeyedProcessFunction<String, Transac
                 thresholds.historyRetention(), thresholds.maxHistoryEntries());
         historyState.update(updated.entries());
         // eviction: fires once the watermark passes the retention horizon of this entry
-        timers.registerEventTimeTimer(transaction.timestamp().toEpochMilli() + thresholds.historyRetention().toMillis() + 1);
+        ctx.timerService().registerEventTimeTimer(transaction.timestamp().toEpochMilli() + thresholds.historyRetention().toMillis() + 1);
     }
 
     private CustomerHistory loadHistory() throws Exception {

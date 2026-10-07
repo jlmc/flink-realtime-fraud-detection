@@ -58,6 +58,11 @@ public final class FraudJob {
                         config.transactionalIdPrefix(), config.kafkaTransactionTimeoutMs()))
                 .name("kafka-risk-events").uid("kafka-risk-events");
 
+        streams.alerts()
+                .sinkTo(KafkaSinks.highRiskAlerts(config.kafkaBootstrapServers(), config.alertsTopic(),
+                        config.alertsTransactionalIdPrefix(), config.kafkaTransactionTimeoutMs()))
+                .name("kafka-high-risk-alerts").uid("kafka-high-risk-alerts");
+
         streams.invalid()
                 .sinkTo(KafkaSinks.invalidEvents(config.kafkaBootstrapServers(), config.invalidTopic()))
                 .name("kafka-invalid-events").uid("kafka-invalid-events");
