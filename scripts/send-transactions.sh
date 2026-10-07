@@ -8,8 +8,11 @@
 #   velocity      6 transactions of 1 EUR within 25 s             -> 6th: HIGH_TRANSACTION_VELOCITY
 #   spending      3 x 2000 EUR within 40 s                        -> 3rd: HIGH_SPENDING_VELOCITY
 #   high-risk     6 x 1000 EUR within 25 s                        -> 6th: score 80 HIGH, one record in fraud.high-risk.alerts
-#   country       PT, then US, then PT within 2 min               -> 3rd: SUSPICIOUS_COUNTRY_CHANGE
+#   country       PT, then US, then PT within 2 min               -> 2nd and 3rd: GEOGRAPHIC_IMPOSSIBILITY
 #   anomaly       25, 30, 20 EUR, then 900 EUR                    -> 4th: UNUSUAL_AMOUNT
+#   impossible-travel  PT, then US 3 min later                    -> 2nd: GEOGRAPHIC_IMPOSSIBILITY
+#   new-country   3 x 20 EUR in PT, then 100 EUR in US 20 min later -> 4th: NEW_COUNTRY_HIGH_AMOUNT
+#   declined-then-approved  3 declined attempts, then an approved one -> 4th: FAILED_ATTEMPTS_THEN_SUCCESS
 #   invalid       negative amount, unsupported currency, missing fields, malformed JSON
 #                                                                 -> 4 records in transaction.invalid.events, none processed
 #   duplicate     the same transaction sent 3 times               -> exactly one result and one row
@@ -33,7 +36,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1; shift ;;
     --wait) WAIT="$2"; shift 2 ;;
-    -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
     -*) echo "unknown option: $1 (see --help)" >&2; exit 1 ;;
     *) SCENARIOS+=("$1"); shift ;;
   esac
@@ -45,7 +48,7 @@ import datetime, json, os, subprocess, sys, time
 
 ROOT, DRY, WAIT = os.environ["ROOT"], os.environ["DRY_RUN"] == "1", int(os.environ["WAIT"])
 CURSOR = os.path.join(ROOT, ".data", "send-transactions.cursor")
-ORDER = ["normal", "velocity", "spending", "high-risk", "country", "anomaly", "invalid", "duplicate", "out-of-order", "late"]
+ORDER = ["normal", "velocity", "spending", "high-risk", "country", "anomaly", "impossible-travel", "new-country", "declined-then-approved", "invalid", "duplicate", "out-of-order", "late"]
 
 requested = sys.argv[1:]
 if "all" in requested:
@@ -90,9 +93,12 @@ run = time.strftime("%H%M%S")
 clock = max(time.time(), read_cursor() + 60)  # event time of the next window
 
 
-def tx(tid, customer, amount, at, currency="EUR", country="PT"):
-    return json.dumps({"transactionId": tid, "customerId": customer, "merchantId": "merchant-10", "amount": amount,
-                       "currency": currency, "country": country, "timestamp": iso(at)}, separators=(",", ":"))
+def tx(tid, customer, amount, at, currency="EUR", country="PT", status=None):
+    event = {"transactionId": tid, "customerId": customer, "merchantId": "merchant-10", "amount": amount,
+             "currency": currency, "country": country, "timestamp": iso(at)}
+    if status:
+        event["paymentStatus"] = status  # APPROVED (the default when absent) or DECLINED
+    return json.dumps(event, separators=(",", ":"))
 
 
 def window(span):
@@ -131,6 +137,19 @@ for name in requested:
         t = window(30)
         send([tx(f"anomaly-{run}-1", cust, 25, t), tx(f"anomaly-{run}-2", cust, 30, t + 10),
               tx(f"anomaly-{run}-3", cust, 20, t + 20), tx(f"anomaly-{run}-4", cust, 900, t + 30)], name)
+    elif name == "impossible-travel":
+        t = window(180)
+        send([tx(f"travel-{run}-1", cust, 40, t, country="PT"),
+              tx(f"travel-{run}-2", cust, 40, t + 180, country="US")], name)
+    elif name == "new-country":
+        t = window(1200)
+        send([tx(f"newcountry-{run}-1", cust, 20, t), tx(f"newcountry-{run}-2", cust, 20, t + 60),
+              tx(f"newcountry-{run}-3", cust, 20, t + 120),
+              tx(f"newcountry-{run}-4", cust, 100, t + 1200, country="US")], name)
+    elif name == "declined-then-approved":
+        t = window(20)
+        send([tx(f"declined-{run}-1", cust, 10, t, status="DECLINED"), tx(f"declined-{run}-2", cust, 10, t + 5, status="DECLINED"),
+              tx(f"declined-{run}-3", cust, 10, t + 10, status="DECLINED"), tx(f"declined-{run}-4", cust, 10, t + 20)], name)
     elif name == "invalid":
         t = window(10)
         send([tx(f"invalid-{run}-negative", cust, -5, t),
