@@ -17,7 +17,7 @@ import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 
 import java.time.Duration;
 
-/** Entry point. Checkpointing, state backend and restart strategy come from the cluster configuration. */
+/** Entry point. Checkpointing, state backend and restart strategy come from the cluster configuration (10 s checkpoints when run without one). */
 public final class FraudJob {
 
     private FraudJob() {
@@ -27,6 +27,11 @@ public final class FraudJob {
         JobConfig config = JobConfig.from(JobConfig.parseArgs(args), System.getenv());
 
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        if (!env.getCheckpointConfig().isCheckpointingEnabled()) {
+            // Started as a plain local process (IDE or java -cp): there is no cluster config.yaml. The Kafka sinks are
+            // exactly-once and only commit on a checkpoint, so without this nothing would ever become visible.
+            env.enableCheckpointing(Duration.ofSeconds(10).toMillis());
+        }
         build(env, config, defaultRules());
         env.execute("transaction-fraud-risk");
     }
