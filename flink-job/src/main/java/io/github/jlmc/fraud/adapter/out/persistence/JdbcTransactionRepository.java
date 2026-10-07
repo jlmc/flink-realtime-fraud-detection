@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.jlmc.fraud.application.model.PersistableEvent;
 import io.github.jlmc.fraud.application.port.out.PersistenceException;
 import io.github.jlmc.fraud.application.port.out.TransactionRepository;
+import io.github.jlmc.fraud.validation.PaymentStatus;
 import io.github.jlmc.fraud.validation.RiskResult;
 import io.github.jlmc.fraud.validation.Transaction;
 
@@ -28,8 +29,8 @@ import java.util.List;
 public final class JdbcTransactionRepository implements TransactionRepository {
 
     static final String INSERT_TRANSACTION = """
-            INSERT INTO transactions (transaction_id, customer_id, merchant_id, amount, currency, country, event_time, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO transactions (transaction_id, customer_id, merchant_id, amount, currency, country, event_time, status, payment_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (transaction_id) DO NOTHING""";
 
     static final String INSERT_RISK_SCORE = """
@@ -114,6 +115,7 @@ public final class JdbcTransactionRepository implements TransactionRepository {
         ps.setString(6, t.country());
         ps.setObject(7, OffsetDateTime.ofInstant(t.timestamp(), ZoneOffset.UTC));
         ps.setString(8, event.status().name());
+        ps.setString(9, t.isDeclined() ? PaymentStatus.DECLINED.name() : PaymentStatus.APPROVED.name());
     }
 
     private static void bind(PreparedStatement ps, Transaction t, RiskResult r) throws SQLException, JsonProcessingException {

@@ -80,6 +80,23 @@ class JdbcTransactionRepositoryIT {
     }
 
     @Test
+    void thePaymentStatusIsStoredAndDefaultsToApproved() throws Exception {
+        Transaction declined = new Transaction("declined-1", "customer-42", "merchant-10", new java.math.BigDecimal("12.00"), "EUR", "PT",
+                io.github.jlmc.fraud.it.support.Events.T0, io.github.jlmc.fraud.validation.PaymentStatus.DECLINED);
+
+        repository.saveAll(List.of(new PersistableEvent(declined, late("x").status(), null, false), late("approved-1")));
+
+        try (var c = db.connect(); var s = c.createStatement();
+             ResultSet rs = s.executeQuery("select transaction_id, payment_status from transactions order by transaction_id")) {
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString(1)).isEqualTo("approved-1");
+            assertThat(rs.getString(2)).isEqualTo("APPROVED");     // no status in the payload means approved
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString(2)).isEqualTo("DECLINED");
+        }
+    }
+
+    @Test
     void replayingTheSameEventsLeavesExactlyOneRowPerTable() {
         List<PersistableEvent> batch = List.of(processed("t1", 80), processed("t2", 10));
 
