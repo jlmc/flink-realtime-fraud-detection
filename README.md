@@ -23,7 +23,7 @@ Transactions arrive as JSON on a Kafka topic. For each one the job:
 
 1. **validates** it with the plugin rules (minimum amount, supported currency, required fields) and routes invalid or malformed messages to a dead-letter topic;
 2. **deduplicates** it by `transactionId`;
-3. **scores its risk** in event-time order per customer (transaction velocity, spending velocity, country change, unusual amount);
+3. **scores its risk** in event-time order per customer with the fraud-rule plugins (transaction velocity, spending velocity, geographic impossibility, unusual amount, new country with a high amount, failed attempts followed by an approval);
 4. **publishes** the result to Kafka, **stores** it in PostgreSQL and, when the risk is HIGH, publishes an actionable **alert**.
 
 | Topic | Content |
@@ -109,7 +109,7 @@ flowchart TB
     ADOUT --> APP
     APP --> DOM
     DOM --> API
-    RULES[[validation-rules/*<br/>independent JARs]] --> API
+    RULES[[validation-rules/* and fraud-rules/*<br/>independent JARs]] --> API
 ```
 
 ### Use cases
@@ -203,7 +203,8 @@ What you get:
 |---|---|
 | Job (shaded) JAR | `flink-job/target/flink-job-1.0.0-SNAPSHOT-shaded.jar` |
 | Plugin API | `validation-api/target/validation-api-1.0.0-SNAPSHOT.jar` |
-| Rule JARs | `validation-rules/validation-rule-*/target/*-SNAPSHOT.jar` |
+| Validation rule JARs | `validation-rules/validation-rule-*/target/*-SNAPSHOT.jar` |
+| Fraud rule JARs | `fraud-rules/fraud-rule-*/target/*-SNAPSHOT.jar` |
 
 The job JAR deliberately contains **no** rule and not the plugin API; the rules are separate JARs.
 
@@ -374,8 +375,11 @@ Do not run the local application and the cluster job with the same `--kafka.cons
 | `velocity` | 6 transactions of 1 EUR in 25 s | the 6th: `HIGH_TRANSACTION_VELOCITY` (MEDIUM) |
 | `spending` | 3 x 2000 EUR in 40 s | the 3rd: `HIGH_SPENDING_VELOCITY` (MEDIUM) |
 | `high-risk` | 6 x 1000 EUR in 25 s | the 6th: score 80, **HIGH**, one alert |
-| `country` | PT, then US, then PT within 2 min | the 3rd: `SUSPICIOUS_COUNTRY_CHANGE` |
+| `country` | PT, then US, then PT within 2 min | the 2nd and 3rd: `GEOGRAPHIC_IMPOSSIBILITY` (MEDIUM) |
 | `anomaly` | 25, 30, 20 EUR, then 900 EUR | the 4th: `UNUSUAL_AMOUNT` |
+| `impossible-travel` | PT, then US 3 min later | the 2nd: `GEOGRAPHIC_IMPOSSIBILITY` (MEDIUM) |
+| `new-country` | 3 x 20 EUR in PT, then 100 EUR in US 20 min later | the 4th: `NEW_COUNTRY_HIGH_AMOUNT` (MEDIUM) |
+| `declined-then-approved` | 3 declined attempts (`"paymentStatus":"DECLINED"`), then an approved one | the 4th: `FAILED_ATTEMPTS_THEN_SUCCESS` (MEDIUM) |
 | `invalid` | negative amount, unsupported currency, missing fields, malformed JSON | 4 records in `transaction.invalid.events`, none stored |
 | `duplicate` | the same transaction 3 times | exactly one result and one row |
 | `out-of-order` | timestamps +20 s, +0 s, +10 s | evaluated in event-time order |
@@ -391,9 +395,12 @@ A transaction looks like this (you can also publish your own, for example with `
   "amount": 1000.00,
   "currency": "EUR",
   "country": "PT",
+  "paymentStatus": "APPROVED",
   "timestamp": "2026-10-07T13:10:01Z"
 }
 ```
+
+`paymentStatus` is optional: `APPROVED` (the default when absent) or `DECLINED`. Any other value is a malformed payload and goes to `transaction.invalid.events`. A declined attempt counts as an attempt (transaction velocity, previous country) but not as spending.
 
 **Event time matters.** The watermark is global, so an event older than what was already seen is *late*. The script gives every scenario its own, later time window (cursor in `.data/send-transactions.cursor`), so running it repeatedly never creates accidental late events.
 
@@ -424,11 +431,39 @@ Every setting of the job is resolved in this order: program argument (`--kafka.b
 | `watermark.out-of-orderness-seconds`, `watermark.idleness-seconds`, `watermark.allowed-lateness-seconds` | 30, 30, 0 |
 | `dedup.retention-hours` | 24 |
 | `risk.max-transactions-per-minute`, `risk.max-amount-per-ten-minutes`, `risk.anomaly-multiplier`, `risk.anomaly-min-history` | 5, 5000, 5, 3 |
+| `risk.impossible-travel-minutes`, `risk.new-country-amount-multiplier`, `risk.new-country-min-history`, `risk.max-declined-per-five-minutes` | 10, 2, 3, 3 |
+
+Every `risk.*` key (also as an environment variable, `RISK_MAX_TRANSACTIONS_PER_MINUTE`) is handed to the fraud-rule plugins, and each rule reads the keys it knows.
 | `postgres.url`, `postgres.user`, `postgres.password` | `jdbc:postgresql://postgres:5432/fraud`, `fraud`, `fraud` |
 | `postgres.pool-size`, `postgres.batch-size`, `postgres.flush-interval-ms`, `postgres.max-retry-seconds` | 4, 500, 200, 60 |
 
 Checkpoints, state backend, restart strategy and high availability are cluster settings (see `docker-compose.yml`).
 For the Flink-container run, extra job arguments go after `--`: `./scripts/flink/upload-job.sh -- --postgres.pool-size 2`.
+
+## The fraud rules are plugins
+
+Validation and risk are two different jobs. **Validation** asks "is this event well formed?" and **risk** asks "does this transaction look
+suspicious?". Both kinds of rule are independent JARs discovered with `ServiceLoader`; the job never references one. Flink builds the
+temporal context (history per customer, windows, event-time order) and hands it to the rules as plain data (`RiskContext`); a rule only
+decides.
+
+| Fraud rule JAR | Reason | Triggers when | Score |
+|---|---|---|---|
+| `fraud-rule-transaction-velocity` | `HIGH_TRANSACTION_VELOCITY` | more than 5 attempts in 1 minute | 40 |
+| `fraud-rule-spending-velocity` | `HIGH_SPENDING_VELOCITY` | more than 5000 spent in 10 minutes | 40 |
+| `fraud-rule-geographic-impossibility` | `GEOGRAPHIC_IMPOSSIBILITY` | another country than the previous transaction, within 10 minutes | 50 |
+| `fraud-rule-unusual-amount` | `UNUSUAL_AMOUNT` | amount above 5x the recent average (3+ past transactions) | 30 |
+| `fraud-rule-new-country` | `NEW_COUNTRY_HIGH_AMOUNT` | first transaction from a country and amount above 2x the average | 40 |
+| `fraud-rule-failed-attempts` | `FAILED_ATTEMPTS_THEN_SUCCESS` | an approval after 3 or more declined attempts in 5 minutes | 40 |
+
+Scores add up, capped at 100 (below 40 LOW, 40 to 69 MEDIUM, 70 or more HIGH). `reasons` are listed in the alphabetical order of the
+rule names, so a replay always yields the same alert. A deployment without any fraud-rule JAR **fails at start-up** instead of scoring
+everything as harmless.
+
+**Add a rule:** create a module under `fraud-rules/` (copy one of the six), implement `TransactionRiskRule`, register it in
+`META-INF/services/io.github.jlmc.fraud.validation.TransactionRiskRule`, list it in `fraud-rules/pom.xml`, run `mvn clean verify`,
+`./scripts/stage-dist.sh` and restart the Flink containers. No other module changes. Reasons and decisions in
+[ADR 0005](docs/decisions/0005-risk-rules-as-plugins.md).
 
 ## Why the rules run sequentially
 
@@ -444,6 +479,7 @@ Details in [ADR 0004](docs/decisions/0004-sequential-rule-evaluation.md).
 ```
 validation-api/          contract of the plugins (no Flink dependency)
 validation-rules/        one independent module and JAR per validation rule
+fraud-rules/             one independent module and JAR per fraud (risk) rule
 flink-job/               the job: domain, application, adapter.in/out, bootstrap
 integration-tests/       tests with real Kafka and PostgreSQL (Testcontainers) and an in-JVM Flink cluster
 db/migration/            Flyway migrations (transactions, risk_scores, fraud_alerts)

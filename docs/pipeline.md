@@ -53,7 +53,7 @@ into several operators, which is Flink's recommended pattern (`OutputTag`).
 
 | | |
 |---|---|
-| **What** | `ValidationProcessFunction` runs the validation rules found by `ServiceLoader` (`validation-rules/*`: amount greater than 0 `AMOUNT_NOT_POSITIVE`, supported currency `CURRENCY_NOT_SUPPORTED`, required fields `REQUIRED_FIELD_MISSING`). Valid transactions continue; everything else goes to the `INVALID` side output. |
+| **What** | `ValidationProcessFunction` runs the validation rules found by `ServiceLoader` (`validation-rules/*`, and the same mechanism for the fraud rules of step 6: amount greater than 0 `AMOUNT_NOT_POSITIVE`, supported currency `CURRENCY_NOT_SUPPORTED`, required fields `REQUIRED_FIELD_MISSING`). Valid transactions continue; everything else goes to the `INVALID` side output. |
 | **Problem it solves** | Garbage in the later steps. Risk rules and the database assume a well-formed transaction (non-null amount, customer, timestamp); this is the gate that guarantees it. |
 | **Why plugins** | Which data is acceptable is a business decision that changes more often than the pipeline. Rules live in independent JARs discovered at start-up, so adding a rule means adding a JAR, not editing the job (see [S1](spikes/S1-plugin-classloading.md)). |
 | **Why first** | It is cheap and stateless, so it removes bad records before the expensive, stateful steps and before any shuffle. |
@@ -96,17 +96,19 @@ one customer's transactions are always handled by the same subtask, in order.
 
 | | |
 |---|---|
-| **What** | Scores each transaction using the customer's recent history and the four built-in rules: |
+| **What** | Scores each transaction with the customer's recent history and the fraud-rule plugins (one JAR per rule, found by `ServiceLoader`, see [ADR 0005](decisions/0005-risk-rules-as-plugins.md)): |
 
-| Rule (`reason`) | Triggers when | Score |
+| Rule JAR (`reason`) | Triggers when | Score |
 |---|---|---|
-| `HIGH_TRANSACTION_VELOCITY` | more than 5 transactions in 1 minute (current included) | 40 |
-| `HIGH_SPENDING_VELOCITY` | more than 5000 spent in 10 minutes (current included; currencies are not converted) | 40 |
-| `SUSPICIOUS_COUNTRY_CHANGE` | country pattern A, B, A inside 10 minutes (only country codes, no distance) | 50 |
-| `UNUSUAL_AMOUNT` | amount above 5 times the customer's recent average, with at least 3 past transactions | 30 |
+| `fraud-rule-transaction-velocity` (`HIGH_TRANSACTION_VELOCITY`) | more than 5 attempts in 1 minute (current included, declined count) | 40 |
+| `fraud-rule-spending-velocity` (`HIGH_SPENDING_VELOCITY`) | more than 5000 spent in 10 minutes (current included; declined spent nothing; currencies are not converted) | 40 |
+| `fraud-rule-geographic-impossibility` (`GEOGRAPHIC_IMPOSSIBILITY`) | another country than the previous transaction's, within 10 minutes (country codes only, no distance) | 50 |
+| `fraud-rule-unusual-amount` (`UNUSUAL_AMOUNT`) | amount above 5 times the customer's recent average, with at least 3 past transactions | 30 |
+| `fraud-rule-new-country` (`NEW_COUNTRY_HIGH_AMOUNT`) | a country not seen in the retained history (1 h) and amount above 2 times the average | 40 |
+| `fraud-rule-failed-attempts` (`FAILED_ATTEMPTS_THEN_SUCCESS`) | an approval after 3 or more declined attempts in the previous 5 minutes | 40 |
 
 Scores are summed and capped at 100: below 40 is `LOW`, 40 to 69 `MEDIUM`, 70 or more `HIGH`. All thresholds are
-configurable (`risk.*`, see the README).
+configurable (`risk.*`, see the README); each plugin reads its own keys. `reasons` follow the alphabetical order of the rule names.
 
 | | |
 |---|---|

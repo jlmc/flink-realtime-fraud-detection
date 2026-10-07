@@ -53,7 +53,7 @@ sem ser dividido em vários operadores, que é o padrão recomendado pelo Flink 
 
 | | |
 |---|---|
-| **O que faz** | O `ValidationProcessFunction` corre as regras de validação encontradas por `ServiceLoader` (`validation-rules/*`: montante maior que 0 `AMOUNT_NOT_POSITIVE`, moeda suportada `CURRENCY_NOT_SUPPORTED`, campos obrigatórios `REQUIRED_FIELD_MISSING`). As válidas continuam; tudo o resto vai para o side output `INVALID`. |
+| **O que faz** | O `ValidationProcessFunction` corre as regras de validação encontradas por `ServiceLoader` (`validation-rules/*`, e o mesmo mecanismo para as regras de fraude do passo 6: montante maior que 0 `AMOUNT_NOT_POSITIVE`, moeda suportada `CURRENCY_NOT_SUPPORTED`, campos obrigatórios `REQUIRED_FIELD_MISSING`). As válidas continuam; tudo o resto vai para o side output `INVALID`. |
 | **Problema que resolve** | Lixo nos passos seguintes. As regras de risco e a base de dados assumem uma transação bem formada (montante, cliente e timestamp não nulos); este é o portão que o garante. |
 | **Porquê plugins** | Que dados são aceitáveis é uma decisão de negócio que muda mais vezes do que o pipeline. As regras vivem em JARs independentes descobertos no arranque: acrescentar uma regra é acrescentar um JAR, não editar o job (ver [S1](spikes/S1-plugin-classloading.md)). |
 | **Porquê primeiro** | É barato e sem estado, por isso remove registos maus antes dos passos caros e com estado, e antes de qualquer shuffle. |
@@ -96,17 +96,19 @@ as transações de um cliente são sempre tratadas pela mesma subtask, por ordem
 
 | | |
 |---|---|
-| **O que faz** | Pontua cada transação com o histórico recente do cliente e as quatro regras incluídas: |
+| **O que faz** | Pontua cada transação com o histórico recente do cliente e os plugins de regras de fraude (um JAR por regra, descobertos por `ServiceLoader`, ver [ADR 0005](decisions/0005-risk-rules-as-plugins.md)): |
 
-| Regra (`reason`) | Dispara quando | Score |
+| JAR da regra (`reason`) | Dispara quando | Score |
 |---|---|---|
-| `HIGH_TRANSACTION_VELOCITY` | mais de 5 transações em 1 minuto (a atual incluída) | 40 |
-| `HIGH_SPENDING_VELOCITY` | mais de 5000 gastos em 10 minutos (a atual incluída; as moedas não são convertidas) | 40 |
-| `SUSPICIOUS_COUNTRY_CHANGE` | padrão de países A, B, A em 10 minutos (só códigos de país, sem distância) | 50 |
-| `UNUSUAL_AMOUNT` | montante acima de 5 vezes a média recente do cliente, com pelo menos 3 transações passadas | 30 |
+| `fraud-rule-transaction-velocity` (`HIGH_TRANSACTION_VELOCITY`) | mais de 5 tentativas num minuto (a atual incluída, as recusadas contam) | 40 |
+| `fraud-rule-spending-velocity` (`HIGH_SPENDING_VELOCITY`) | mais de 5000 gastos em 10 minutos (a atual incluída; as recusadas não gastaram; as moedas não são convertidas) | 40 |
+| `fraud-rule-geographic-impossibility` (`GEOGRAPHIC_IMPOSSIBILITY`) | país diferente do da transação anterior, em menos de 10 minutos (só códigos de país, sem distância) | 50 |
+| `fraud-rule-unusual-amount` (`UNUSUAL_AMOUNT`) | montante acima de 5 vezes a média recente do cliente, com pelo menos 3 transações passadas | 30 |
+| `fraud-rule-new-country` (`NEW_COUNTRY_HIGH_AMOUNT`) | país não visto no histórico retido (1 h) e montante acima de 2 vezes a média | 40 |
+| `fraud-rule-failed-attempts` (`FAILED_ATTEMPTS_THEN_SUCCESS`) | uma aprovação depois de 3 ou mais tentativas recusadas nos 5 minutos anteriores | 40 |
 
 Os scores somam-se com teto em 100: abaixo de 40 é `LOW`, de 40 a 69 `MEDIUM`, 70 ou mais `HIGH`. Todos os limiares são
-configuráveis (`risk.*`, ver o README).
+configuráveis (`risk.*`, ver o README); cada plugin lê as suas chaves. Os `reasons` seguem a ordem alfabética dos nomes das regras.
 
 | | |
 |---|---|

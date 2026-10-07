@@ -27,11 +27,14 @@ Invalid, poison and late transactions never produce alerts (they are never risk-
   "customerId": "customer-42",
   "riskScore": 80,
   "riskLevel": "HIGH",
-  "reasons": ["HIGH_TRANSACTION_VELOCITY", "HIGH_SPENDING_VELOCITY"],
+  "reasons": ["HIGH_SPENDING_VELOCITY", "HIGH_TRANSACTION_VELOCITY"],
   "transactionTimestamp": "2026-10-06T13:10:01Z"
 }
 ```
 
+- `reasons` are the reasons of the fraud rules that fired, in the alphabetical order of the rule names (a replay gives the same list).
+  The rules are plugins, so the possible values depend on the deployed JARs; the six shipped ones are `HIGH_TRANSACTION_VELOCITY`,
+  `HIGH_SPENDING_VELOCITY`, `GEOGRAPHIC_IMPOSSIBILITY`, `UNUSUAL_AMOUNT`, `NEW_COUNTRY_HIGH_AMOUNT` and `FAILED_ATTEMPTS_THEN_SUCCESS`.
 - `alertId` is deterministic (`high-risk-v1-<transactionId>`): the alert is a pure function of the risk result, so processing the
   same transaction twice yields an identical record. The `v1` is the alert's meaning; change it if that meaning changes.
 - There is no `alertTimestamp`: a processing-time value would differ on every replay and defeat the deterministic id. The Kafka record

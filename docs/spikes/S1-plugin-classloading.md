@@ -38,3 +38,9 @@ inside `RichMapFunction#open`), run on the real Docker Compose cluster (1 JM + 1
 - Smoke test results over real Kafka (16 messages): duplicate collapsed to one result, an out-of-order event still produced the
   PT -> US -> PT alert, 6th transaction within a minute raised the velocity alert, and the real plugin rules, a poison message and a
   message without customer all went to `transaction.invalid.events`.
+
+## Addendum: fraud (risk) rules use the same mechanism
+
+The fraud rules (`fraud-rules/fraud-rule-*`, `TransactionRiskRule`) are discovered exactly like the validation rules: the context
+classloader inside `RiskEvaluationFunction.open()` on the TaskManager, JARs in `lib/` (Session Mode) or `usrlib/` (Application Mode),
+`validation-api` shared next to them. Nothing in the conclusions above changes. See [ADR 0005](../decisions/0005-risk-rules-as-plugins.md).

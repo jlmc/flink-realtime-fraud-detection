@@ -205,7 +205,7 @@ Isso é o JobManager. Não processa eventos.
 a cada job.
 
 **O que é especial neste compose.**
-- Arranca através de `docker/flink/session-entrypoint.sh`, que copia os JARs dos plugins de regras de validação (de
+- Arranca através de `docker/flink/session-entrypoint.sh`, que copia os JARs dos plugins (regras de validação e de fraude, de
   `dist/usrlib`) para a pasta `lib/` do Flink antes de o arrancar. Razão (spike [S1](spikes/S1-plugin-classloading.md)): em
   Session Mode a pasta `usrlib/` **não** está no classpath, logo o job não conseguiria descobrir as regras com
   `ServiceLoader`. Consequência: **mudar uma regra implica correr `scripts/stage-dist.sh` e reiniciar os contentores
@@ -365,7 +365,7 @@ do zero a menos que restaures explicitamente de um checkpoint ou savepoint (`scr
 |---|---|---|
 | `docker compose ps` mostra `*-init` como `Exited (0)` | Normal: os jobs de preparação terminaram | Nada a fazer |
 | `flink-jobmanager` fica em `Created`/`Waiting` | Um serviço de init falhou ou o ZooKeeper não está saudável | `docker compose ps -a` e depois `docker compose logs <serviço>` |
-| O job falha com "no validation rules" | Plugins não preparados, ou Flink não reiniciado após o stage | `scripts/stage-dist.sh` e depois `docker compose restart flink-jobmanager flink-taskmanager` |
+| O job falha com "no validation rules" ou "no TransactionRiskRule" | Plugins não preparados, ou Flink não reiniciado após o stage | `scripts/stage-dist.sh` e depois `docker compose restart flink-jobmanager flink-taskmanager` |
 | `ClassNotFoundException` em Application Mode | `usrlib` montado só no JobManager | Mantém os dois serviços `*-app` com os mesmos volumes |
 | Checkpoints falham, "bucket does not exist" | O `minio-init` não correu ou `.data/minio` foi apagado | `docker compose up -d minio-init` |
 | O JobManager não recupera após apagar dados | `.data/zookeeper` e `.data/minio` dessincronizados | `docker compose down && rm -rf .data` |
