@@ -3,10 +3,11 @@
 #
 #   scripts/send-transactions.sh [options] [scenario ...]        (default: all)
 #
-# Scenarios (what you should see in transaction.risk.events / transaction.invalid.events / PostgreSQL):
+# Scenarios (what you should see in transaction.risk.events / fraud.high-risk.alerts (HIGH only) / transaction.invalid.events / PostgreSQL):
 #   normal        1 transaction                                   -> risk LOW, score 0
 #   velocity      6 transactions of 1 EUR within 25 s             -> 6th: HIGH_TRANSACTION_VELOCITY
 #   spending      3 x 2000 EUR within 40 s                        -> 3rd: HIGH_SPENDING_VELOCITY
+#   high-risk     6 x 1000 EUR within 25 s                        -> 6th: score 80 HIGH, one record in fraud.high-risk.alerts
 #   country       PT, then US, then PT within 2 min               -> 3rd: SUSPICIOUS_COUNTRY_CHANGE
 #   anomaly       25, 30, 20 EUR, then 900 EUR                    -> 4th: UNUSUAL_AMOUNT
 #   invalid       negative amount, unsupported currency, missing fields, malformed JSON
@@ -44,7 +45,7 @@ import datetime, json, os, subprocess, sys, time
 
 ROOT, DRY, WAIT = os.environ["ROOT"], os.environ["DRY_RUN"] == "1", int(os.environ["WAIT"])
 CURSOR = os.path.join(ROOT, ".data", "send-transactions.cursor")
-ORDER = ["normal", "velocity", "spending", "country", "anomaly", "invalid", "duplicate", "out-of-order", "late"]
+ORDER = ["normal", "velocity", "spending", "high-risk", "country", "anomaly", "invalid", "duplicate", "out-of-order", "late"]
 
 requested = sys.argv[1:]
 if "all" in requested:
@@ -118,6 +119,9 @@ for name in requested:
     elif name == "spending":
         t = window(40)
         send([tx(f"spending-{run}-{i}", cust, 2000, t + 20 * (i - 1)) for i in range(1, 4)], name)
+    elif name == "high-risk":
+        t = window(25)
+        send([tx(f"highrisk-{run}-{i}", cust, 1000, t + 5 * (i - 1)) for i in range(1, 7)], name)
     elif name == "country":
         t = window(120)
         send([tx(f"country-{run}-1", cust, 40, t, country="PT"),
@@ -158,6 +162,7 @@ if not flushed_by_late:
 write_cursor(clock)
 print(f"\nrun id {run}. Results show up after the next checkpoint (about 10 s). Look at them with:")
 print(f"  docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:19092 --topic transaction.risk.events --from-beginning --isolation-level read_committed --timeout-ms 5000")
+print(f"  docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:19092 --topic fraud.high-risk.alerts --from-beginning --isolation-level read_committed --timeout-ms 5000")
 print(f"  docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:19092 --topic transaction.invalid.events --from-beginning --timeout-ms 5000")
 print(f"  docker compose exec postgres psql -U fraud -d fraud -c \"select transaction_id, status from transactions where transaction_id like '%-{run}-%' order by 1\"")
 PY
